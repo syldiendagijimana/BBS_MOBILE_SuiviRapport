@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# React Native / Android
+**/.gradle/
+**/build/
+**/.idea/
+**/local.properties
+
+# Metro
+.metro-health-check*
+
+# Logs
+*.log
+
+# SQLite database
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# APK / AAB
+*.apk
+*.aab
+
+# Temporary files
+*.tmp
+*.temp
+
+# Backend uploads / fichiers générés
+backend/uploads/
+backend/temp/
+*_temp_*.jpg
+
+# Android signing key
+*.keystore
+*.jks
