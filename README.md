@@ -554,7 +554,8 @@ cd BBS_SuiviRapport/mobile/android
 Puis :
 
 ```bash
-./gradlew assembleRelease
+ .\gradlew clean
+.\gradlew assembleRelease
 ```
 
 Sous Windows PowerShell, utiliser :
