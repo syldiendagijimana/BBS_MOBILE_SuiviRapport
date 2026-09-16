@@ -1,197 +1,600 @@
-# BBS Mobile - Bandwidth Band Services
-## Application de gestion des rapports terrain
+# BBS_SuiviRapport
+
+## Application mobile de gestion des rapports sur terrain — Burundi Backbone System
 
 ---
 
 ## 📋 Description
 
-BBS Mobile est une application mobile complète développée en **React Native (JavaScript)** avec un backend **Node.js + SQLite**, permettant la gestion des rapports terrain pour un service réseau de bande passante.
+**BBS_SuiviRapport** est une application mobile développée dans le cadre de la gestion des rapports sur terrain pour le **Burundi Backbone System (BBS)**.
+
+L'application permet aux différents utilisateurs de gérer les missions, les rapports d'intervention, les incidents, les utilisateurs, les techniciens, les superviseurs, les notifications, les messages, le suivi des clients, l'état du réseau et les statistiques.
+
+L'application est développée avec :
+
+* **React Native** pour l'application mobile ;
+* **Node.js + Express.js** pour le backend ;
+* **SQLite avec better-sqlite3** pour la base de données ;
+* **JWT** pour l'authentification et la sécurisation des accès.
 
 ---
 
-## 🏗️ Architecture du projet
+# 🏗️ Architecture du projet
 
-```
-BBS/
-├── backend/                    # Serveur Node.js + SQLite
-│   ├── db/
-│   │   └── database.js         # Initialisation SQLite + schéma
-│   ├── middleware/
-│   │   └── auth.js             # JWT + contrôle d'accès
-│   ├── routes/
-│   │   ├── auth.js             # Authentification
-│   │   ├── users.js            # Gestion utilisateurs
-│   │   ├── techniciens.js      # Gestion techniciens
-│   │   ├── rapports.js         # Rapports terrain
-│   │   ├── incidents.js        # Incidents
-│   │   ├── reseau.js           # Bande passante + notifs
-│   │   └── statistiques.js     # Stats & tableaux de bord
-│   ├── uploads/                # Photos des rapports
-│   ├── .env                    # Variables d'environnement
-│   ├── package.json
-│   └── server.js               # Point d'entrée serveur
+Le projet adopte une **architecture client-serveur à deux parties principales** :
+
+1. **Frontend mobile** : application React Native ;
+2. **Backend** : API REST développée avec Node.js et Express.js.
+
+La base de données SQLite est utilisée par le backend pour enregistrer et gérer les données de l'application.
+
+```text
+BBS_SuiviRapport/
 │
-└── mobile/                     # Application React Native
-    ├── android/                # Projet Android Studio
-    │   ├── app/
-    │   │   ├── src/main/
-    │   │   │   ├── java/com/bbsmobile/
-    │   │   │   │   ├── MainActivity.kt
-    │   │   │   │   └── MainApplication.kt
-    │   │   │   ├── res/
-    │   │   │   │   ├── values/  (strings, styles, colors)
-    │   │   │   │   └── xml/file_paths.xml
-    │   │   │   └── AndroidManifest.xml
-    │   │   ├── build.gradle
-    │   │   └── proguard-rules.pro
-    │   ├── gradle/wrapper/
-    │   ├── build.gradle
-    │   ├── settings.gradle
-    │   └── gradle.properties
-    ├── src/
-    │   ├── context/
-    │   │   └── AuthContext.js  # Authentification globale
-    │   ├── navigation/
-    │   │   └── index.js        # Navigation (Stack + BottomTabs)
-    │   ├── screens/
-    │   │   ├── LoginScreen.js
-    │   │   ├── DashboardScreen.js
-    │   │   ├── UsersScreen.js
-    │   │   ├── UserFormScreen.js
-    │   │   ├── TechniciensScreen.js
-    │   │   ├── TechnicienFormScreen.js
-    │   │   ├── TachesScreen.js
-    │   │   ├── RapportsScreen.js
-    │   │   ├── RapportFormScreen.js
-    │   │   ├── RapportDetailScreen.js
-    │   │   ├── IncidentsScreen.js
-    │   │   ├── IncidentFormScreen.js
-    │   │   ├── ReseauScreen.js
-    │   │   ├── StatistiquesScreen.js
-    │   │   └── ProfilScreen.js
-    │   ├── components/
-    │   │   └── index.js        # Composants réutilisables
-    │   ├── services/
-    │   │   └── api.js          # Couche API (Axios)
-    │   └── theme/
-    │       └── index.js        # Couleurs, typographie, espacement
-    ├── App.js                  # ✅ Composant racine
-    ├── index.js                # ✅ Point d'entrée React Native
-    ├── app.json                # ✅ Config app
-    ├── babel.config.js
-    ├── metro.config.js
-    └── package.json
+├── .idea/
+│
+├── backend/                         ← BACKEND
+│   │
+│   ├── db/                          ← BASE DE DONNÉES
+│   │   ├── bbs.db
+│   │   ├── bbs.db-shm
+│   │   ├── bbs.db-wal
+│   │   ├── bbs_backup.db
+│   │   └── database.js
+│   │
+│   ├── middleware/                  ← SÉCURITÉ / AUTHENTIFICATION
+│   │   └── auth.js
+│   │
+│   ├── routes/                      ← API REST
+│   │   ├── auth.js
+│   │   ├── historique.js
+│   │   ├── incidents.js
+│   │   ├── messages.js
+│   │   ├── missions.js
+│   │   ├── notifications.js
+│   │   ├── permissions.js
+│   │   ├── rapports.js
+│   │   ├── reseau.js
+│   │   ├── statistiques.js
+│   │   ├── suivi_clients.js
+│   │   ├── superviseurs.js
+│   │   ├── techniciens.js
+│   │   └── utilisateurs.js
+│   │
+│   ├── uploads/                     ← FICHIERS / PHOTOS
+│   │
+│   ├── .env                         ← CONFIGURATION
+│   ├── package.json
+│   ├── package-lock.json
+│   └── server.js                    ← SERVEUR EXPRESS
+│
+│
+├── mobile/                          ← FRONTEND MOBILE
+│   │
+│   ├── android/                     ← PROJET ANDROID
+│   │
+│   ├── assets/                      ← RESSOURCES
+│   │
+│   ├── src/
+│   │   │
+│   │   ├── components/              ← COMPOSANTS RÉUTILISABLES
+│   │   │   ├── GradientHeader.js
+│   │   │   └── index.js
+│   │   │
+│   │   ├── context/                 ← ÉTAT GLOBAL
+│   │   │   └── AuthContext.js
+│   │   │
+│   │   ├── navigation/              ← NAVIGATION
+│   │   │   └── index.js
+│   │   │
+│   │   ├── screens/                 ← INTERFACES
+│   │   │   ├── DashboardScreen.js
+│   │   │   ├── GroupeMessageScreen.js
+│   │   │   ├── HistoriqueScreen.js
+│   │   │   ├── IncidentFormScreen.js
+│   │   │   ├── IncidentsScreen.js
+│   │   │   ├── LoginScreen.js
+│   │   │   ├── MessagesScreen.js
+│   │   │   ├── MissionDetailScreen.js
+│   │   │   ├── MissionFormScreen.js
+│   │   │   ├── MissionsScreen.js
+│   │   │   ├── NotificationsScreen.js
+│   │   │   ├── PermissionDetailScreen.js
+│   │   │   ├── PermissionFormScreen.js
+│   │   │   ├── PermissionsScreen.js
+│   │   │   ├── ProfilScreen.js
+│   │   │   ├── RapportDetailScreen.js
+│   │   │   ├── RapportFormScreen.js
+│   │   │   ├── RapportsScreen.js
+│   │   │   ├── ReseauScreen.js
+│   │   │   ├── StatistiquesScreen.js
+│   │   │   ├── SuiviClientFormScreen.js
+│   │   │   ├── SuiviClientsScreen.js
+│   │   │   ├── SuperviseurDetailScreen.js
+│   │   │   ├── SuperviseurFormScreen.js
+│   │   │   ├── SuperviseursScreen.js
+│   │   │   ├── TachesScreen.js
+│   │   │   ├── TechnicienFormScreen.js
+│   │   │   ├── TechniciensScreen.js
+│   │   │   ├── UserFormScreen.js
+│   │   │   ├── UsersScreen.js
+│   │   │   └── WelcomeScreen.js
+│   │   │
+│   │   ├── services/                ← COMMUNICATION AVEC L'API
+│   │   │   ├── api.js
+│   │   │   ├── messagesAPI.js
+│   │   │   └── notificationsAPI.js
+│   │   │
+│   │   └── theme/                   ← STYLE GLOBAL
+│   │       └── index.js
+│   │
+│   ├── App.js
+│   ├── index.js
+│   ├── app.json
+│   ├── babel.config.js
+│   ├── metro.config.js
+│   ├── package.json
+│   └── package-lock.json
+│
+├── README.md
+└── package-lock.json
 ```
 
 ---
 
-## 🚀 Installation & Démarrage
+# 📂 Description des principaux dossiers
 
-### Prérequis
-- Node.js >= 18
-- Android Studio (avec SDK Android 34)
-- JDK 17
-- React Native CLI
+## Backend
 
-### 1. Backend
+Le dossier `backend/` contient toute la partie serveur de l'application.
 
-```bash
-cd BBS/backend
-npm install
-npm start
-# Serveur démarre sur http://localhost:3000
-# Compte admin créé automatiquement : admin@bbs.com / Admin@123
+### `backend/db/`
+
+Ce dossier contient la base de données SQLite et le fichier permettant de l'initialiser et de la gérer.
+
+* `bbs.db` : base de données principale ;
+* `bbs.db-shm` : fichier temporaire utilisé par SQLite en mode WAL ;
+* `bbs.db-wal` : journal des transactions SQLite ;
+* `bbs_backup.db` : sauvegarde de la base ;
+* `database.js` : connexion, initialisation et gestion du schéma de la base de données.
+
+### `backend/middleware/`
+
+Ce dossier contient les mécanismes intermédiaires utilisés par le serveur.
+
+`auth.js` assure notamment :
+
+* la vérification du token JWT ;
+* l'authentification des utilisateurs ;
+* le contrôle des accès selon les rôles et permissions.
+
+### `backend/routes/`
+
+Ce dossier contient les différentes routes de l'API REST.
+
+| Fichier            | Fonction                      |
+| ------------------ | ----------------------------- |
+| `auth.js`          | Authentification et connexion |
+| `utilisateurs.js`  | Gestion des utilisateurs      |
+| `superviseurs.js`  | Gestion des superviseurs      |
+| `techniciens.js`   | Gestion des techniciens       |
+| `missions.js`      | Gestion des missions          |
+| `rapports.js`      | Gestion des rapports terrain  |
+| `incidents.js`     | Gestion des incidents         |
+| `messages.js`      | Gestion des messages          |
+| `notifications.js` | Gestion des notifications     |
+| `permissions.js`   | Gestion des permissions       |
+| `reseau.js`        | Gestion et suivi du réseau    |
+| `statistiques.js`  | Statistiques et indicateurs   |
+| `historique.js`    | Historique des opérations     |
+| `suivi_clients.js` | Suivi des clients             |
+
+### `backend/uploads/`
+
+Ce dossier permet de stocker les fichiers envoyés par l'application mobile, notamment les photos associées aux rapports et interventions.
+
+### `backend/server.js`
+
+`server.js` constitue le **point d'entrée du backend**.
+
+Il assure notamment :
+
+* le démarrage du serveur Express ;
+* la configuration du serveur ;
+* l'activation de CORS ;
+* l'enregistrement des routes API ;
+* la gestion des fichiers ;
+* la connexion avec les différents modules du backend.
+
+---
+
+# 📱 Frontend mobile
+
+Le dossier `mobile/` contient l'application mobile développée avec React Native.
+
+## `mobile/src/screens/`
+
+Ce dossier contient les différentes interfaces de l'application.
+
+Les écrans couvrent notamment :
+
+* authentification ;
+* tableau de bord ;
+* utilisateurs ;
+* superviseurs ;
+* techniciens ;
+* missions ;
+* rapports terrain ;
+* incidents ;
+* permissions ;
+* messages ;
+* notifications ;
+* réseau ;
+* statistiques ;
+* suivi des clients ;
+* historique ;
+* profil ;
+* tâches.
+
+## `mobile/src/components/`
+
+Contient les composants graphiques réutilisables dans plusieurs écrans.
+
+Exemple :
+
+```text
+GradientHeader.js
 ```
 
-### 2. Mobile (React Native)
+## `mobile/src/context/`
+
+Contient la gestion de l'état global de l'application.
+
+```text
+AuthContext.js
+```
+
+Ce contexte permet notamment de gérer :
+
+* l'utilisateur connecté ;
+* le token d'authentification ;
+* l'état de connexion ;
+* les informations liées à la session.
+
+## `mobile/src/navigation/`
+
+Contient la configuration de la navigation entre les différentes interfaces de l'application.
+
+```text
+index.js
+```
+
+## `mobile/src/services/`
+
+Cette partie assure la communication entre l'application mobile et le backend.
+
+```text
+api.js
+messagesAPI.js
+notificationsAPI.js
+```
+
+Les services permettent d'envoyer des requêtes HTTP à l'API REST et de récupérer les données du serveur.
+
+## `mobile/src/theme/`
+
+Contient les paramètres graphiques communs de l'application :
+
+* couleurs ;
+* styles ;
+* tailles ;
+* typographie ;
+* espacements.
+
+---
+
+# 🔄 Fonctionnement général
+
+Le fonctionnement de l'application peut être représenté ainsi :
+
+```text
+┌───────────────────────────────┐
+│          UTILISATEUR          │
+└───────────────┬───────────────┘
+                │
+                ▼
+┌───────────────────────────────┐
+│       APPLICATION MOBILE      │
+│          React Native         │
+│                               │
+│  Screens / Components         │
+│  Navigation / Context         │
+│  Services API                 │
+└───────────────┬───────────────┘
+                │
+                │ HTTP / JSON
+                ▼
+┌───────────────────────────────┐
+│           BACKEND             │
+│       Node.js + Express       │
+│                               │
+│  Middleware d'authentification│
+│  Routes API REST              │
+└───────────────┬───────────────┘
+                │
+                ▼
+┌───────────────────────────────┐
+│          DATABASE             │
+│            SQLite             │
+│                               │
+│           bbs.db              │
+└───────────────────────────────┘
+```
+
+Pour les photos et fichiers :
+
+```text
+Application mobile
+        │
+        │ Upload
+        ▼
+Backend Express
+        │
+        ▼
+backend/uploads/
+```
+
+---
+
+# 🚀 Installation et démarrage
+
+## Prérequis
+
+Avant d'installer le projet, il est nécessaire d'avoir :
+
+* Node.js ;
+* npm ;
+* JDK 17 ;
+* Android Studio ;
+* Android SDK ;
+* React Native CLI ;
+* un émulateur Android ou un appareil Android physique.
+
+---
+
+# 1. Installation du Backend
+
+Ouvrir un terminal dans le dossier du projet :
 
 ```bash
-cd BBS/mobile
-npm install
+cd BBS_SuiviRapport/backend
+```
 
-# Lancer sur émulateur Android
+Installer les dépendances :
+
+```bash
+npm install
+```
+
+Démarrer le serveur :
+
+```bash
+npm start
+```
+
+Le serveur démarre normalement sur :
+
+```text
+http://localhost:3000
+```
+
+L'API est accessible sous :
+
+```text
+http://localhost:3000/api
+```
+
+---
+
+# 2. Installation de l'application mobile
+
+Ouvrir un autre terminal :
+
+```bash
+cd BBS_SuiviRapport/mobile
+```
+
+Installer les dépendances :
+
+```bash
+npm install
+```
+
+Puis lancer l'application Android :
+
+```bash
 npx react-native run-android
 ```
 
-### 3. Ouvrir dans Android Studio
+---
 
-1. Ouvrir **Android Studio**
-2. **File → Open** → sélectionner `BBS/mobile/android/`
-3. Attendre la synchronisation Gradle
-4. Cliquer **Run ▶** (émulateur ou appareil physique)
+# 3. Exécution avec Android Studio
+
+Il est également possible d'utiliser Android Studio.
+
+1. Ouvrir **Android Studio**.
+2. Sélectionner **File → Open**.
+3. Ouvrir :
+
+```text
+BBS_SuiviRapport/mobile/android/
+```
+
+4. Attendre la synchronisation de Gradle.
+5. Démarrer un émulateur Android ou connecter un téléphone.
+6. Cliquer sur **Run ▶**.
 
 ---
 
-## 🔑 Comptes de test
+# 🌐 Configuration de l'API
 
-| Email | Mot de passe | Rôle |
-|-------|-------------|------|
-| admin@bbs.com | Admin@123 | Administrateur |
+La communication avec le backend est configurée dans :
 
-*(Créez des superviseurs et techniciens depuis l'interface admin)*
+```text
+mobile/src/services/api.js
+```
 
----
-
-## 📱 Modules disponibles
-
-| Module | Description | Rôles |
-|--------|-------------|-------|
-| **Authentification** | Login/Logout, JWT, gestion session | Tous |
-| **Utilisateurs** | CRUD complet, activation/désactivation | Admin |
-| **Techniciens** | Profils, zones, disponibilité | Admin, Superviseur |
-| **Tâches** | Affectation de missions | Admin, Superviseur |
-| **Rapports terrain** | Création avec photos, suivi statut | Tous |
-| **Incidents** | Signalement, priorités, résolution | Tous |
-| **Réseau** | Surveillance bande passante, alertes | Tous |
-| **Statistiques** | KPIs, graphiques, rapport mensuel | Admin, Superviseur |
-| **Profil** | Paramètres compte, changement MDP | Tous |
-
----
-
-## ⚙️ Configuration API
-
-Dans `mobile/src/services/api.js` :
+Pour un émulateur Android, l'adresse du PC hôte peut être :
 
 ```javascript
-// Pour émulateur Android (adresse de la machine hôte)
 const BASE_URL = 'http://10.0.2.2:3000/api';
+```
 
-// Pour appareil physique (remplacer par votre IP locale)
-// const BASE_URL = 'http://192.168.X.X:3000/api';
+Pour un téléphone Android connecté au même réseau Wi-Fi que le PC, utiliser l'adresse IP locale du PC :
+
+```javascript
+const BASE_URL = 'http://192.168.X.X:3000/api';
+```
+
+L'adresse IP doit être remplacée par l'adresse réelle de l'ordinateur exécutant le backend.
+
+---
+
+# 🔐 Authentification et sécurité
+
+L'application utilise une authentification basée sur **JWT (JSON Web Token)**.
+
+Le fonctionnement général est :
+
+```text
+Utilisateur
+     │
+     ▼
+LoginScreen
+     │
+     ▼
+API /auth
+     │
+     ▼
+Vérification des identifiants
+     │
+     ▼
+Token JWT
+     │
+     ▼
+AuthContext
+     │
+     ▼
+Accès aux fonctionnalités autorisées
+```
+
+Le fichier principal associé à cette fonctionnalité est :
+
+```text
+backend/middleware/auth.js
+```
+
+et côté mobile :
+
+```text
+mobile/src/context/AuthContext.js
 ```
 
 ---
 
-## 📦 Génération APK (Release)
+# 📱 Modules de l'application
+
+| Module               | Description                                  |
+| -------------------- | -------------------------------------------- |
+| **Authentification** | Connexion, déconnexion et gestion de session |
+| **Utilisateurs**     | Gestion des comptes utilisateurs             |
+| **Superviseurs**     | Gestion des superviseurs                     |
+| **Techniciens**      | Gestion des techniciens                      |
+| **Missions**         | Création et gestion des missions             |
+| **Rapports terrain** | Création et consultation des rapports        |
+| **Incidents**        | Déclaration et suivi des incidents           |
+| **Messages**         | Communication entre utilisateurs             |
+| **Notifications**    | Notifications et alertes                     |
+| **Permissions**      | Gestion des permissions                      |
+| **Réseau**           | Suivi de l'état du réseau                    |
+| **Statistiques**     | Consultation des indicateurs et statistiques |
+| **Historique**       | Consultation des opérations effectuées       |
+| **Suivi clients**    | Gestion du suivi des clients                 |
+| **Profil**           | Consultation et gestion du profil            |
+
+---
+
+# 🛠️ Technologies utilisées
+
+| Technologie          | Utilisation                            |
+| -------------------- | -------------------------------------- |
+| **React Native**     | Développement de l'application mobile  |
+| **JavaScript**       | Langage principal du frontend          |
+| **Node.js**          | Environnement d'exécution du backend   |
+| **Express.js**       | Développement de l'API REST            |
+| **SQLite**           | Base de données                        |
+| **better-sqlite3**   | Communication avec SQLite              |
+| **JWT**              | Authentification et sécurisation       |
+| **React Navigation** | Navigation dans l'application mobile   |
+| **Axios**            | Communication HTTP avec l'API          |
+| **Multer**           | Gestion des fichiers et photos         |
+| **bcryptjs**         | Hachage des mots de passe              |
+| **Android Studio**   | Environnement de développement Android |
+| **Gradle**           | Construction de l'application Android  |
+
+---
+
+# 📦 Génération de l'APK
+
+Pour générer une version Android destinée à la distribution :
 
 ```bash
-cd BBS/mobile/android
+cd BBS_SuiviRapport/mobile/android
+```
 
-# Générer le keystore (première fois seulement)
-keytool -genkey -v -keystore app/bbs-release.keystore \
-  -alias bbs-key -keyalg RSA -keysize 2048 -validity 10000
+Puis :
 
-# Configurer android/gradle.properties avec les mots de passe
-
-# Générer l'APK
+```bash
 ./gradlew assembleRelease
+```
 
-# APK disponible dans :
-# app/build/outputs/apk/release/app-release.apk
+Sous Windows PowerShell, utiliser :
+
+```powershell
+.\gradlew assembleRelease
+```
+
+L'APK généré se trouve généralement dans :
+
+```text
+mobile/android/app/build/outputs/apk/release/
 ```
 
 ---
 
-## 🛠️ Technologies utilisées
+# 📌 Résumé de l'architecture
 
-| Technologie | Version | Usage |
-|------------|---------|-------|
-| React Native | 0.73.4 | Frontend mobile |
-| Node.js | >= 18 | Backend API |
-| SQLite (better-sqlite3) | 9.x | Base de données |
-| Express.js | 4.x | Serveur HTTP |
-| JWT | 9.x | Authentification |
-| React Navigation | 6.x | Navigation mobile |
-| Axios | 1.x | Requêtes HTTP |
-| Multer | 1.x | Upload photos |
-| bcryptjs | 2.x | Hashage mots de passe |
+Le projet **BBS_SuiviRapport** conserve une architecture simple et claire :
+
+```text
+BBS_SuiviRapport
+│
+├── BACKEND
+│   ├── Node.js
+│   ├── Express.js
+│   ├── API REST
+│   ├── Authentification JWT
+│   ├── SQLite
+│   └── Upload des fichiers
+│
+└── MOBILE
+    ├── React Native
+    ├── Screens
+    ├── Components
+    ├── Context
+    ├── Navigation
+    ├── Services API
+    └── Theme
+```
+
+Cette organisation permet de séparer clairement **l'interface mobile**, **les services de communication**, **la logique serveur**, **la sécurité** et **la gestion des données**, tout en conservant la structure actuelle du projet.
