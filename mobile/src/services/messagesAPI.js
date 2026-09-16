@@ -1,7 +1,8 @@
 //Mobile/src/services/messagesAPI.js
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-const API_URL = 'http://10.40.223.120:3000/api';
+//const API_URL = 'http://10.161.59.120:3000/api';
+const API_URL = "https://bbs-mobile-suivirapport-backend.onrender.com/api";
 
 // =========================================================
 // UTILITAIRES

@@ -6,7 +6,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // CONFIGURATION
 // =========================================================
 
-const API_URL = "http://10.40.223.120:3000/api";
+//const API_URL = "http://10.161.59.120:3000/api";
+const API_URL = "https://bbs-mobile-suivirapport-backend.onrender.com/api";
+
 const TIMEOUT = 30000;
 
 // =========================================================
@@ -438,10 +440,78 @@ export const historiqueAPI = {
 };
 
 // =========================================================
+// FONCTIONS UTILITAIRES AVANCÉES
+// =========================================================
+
+/**
+ * Charge tous les utilisateurs (admin, DJ, superviseur, technicien)
+ * avec fallback automatique si /utilisateurs n'existe pas
+ */
+export const fetchAllUsers = async () => {
+  console.log('🔄 [fetchAllUsers] Début du chargement...');
+
+  // Stratégie 1 : Essayer /utilisateurs
+  try {
+    const data = await api.get('/utilisateurs');
+    const users = data?.data || data || [];
+
+    if (Array.isArray(users) && users.length > 0) {
+      console.log('✅ [fetchAllUsers] Chargé via /utilisateurs:', users.length);
+      return users.map(u => ({
+        ...u,
+        role: u.role || 'utilisateur',
+      }));
+    }
+  } catch (e) {
+    console.warn('⚠️ [fetchAllUsers] /utilisateurs échoué:', e.message);
+  }
+
+  // Stratégie 2 : Combiner /superviseurs + /techniciens
+  console.log('🔄 [fetchAllUsers] Fallback: /superviseurs + /techniciens');
+
+  const results = await Promise.allSettled([
+    api.get('/superviseurs'),
+    api.get('/techniciens'),
+  ]);
+
+  const superviseurs = results[0].status === 'fulfilled'
+    ? (results[0].value?.data || results[0].value || [])
+    : [];
+  const techniciens = results[1].status === 'fulfilled'
+    ? (results[1].value?.data || results[1].value || [])
+    : [];
+
+  const users = [
+    ...superviseurs.map(s => ({ ...s, role: s.role || 'superviseur' })),
+    ...techniciens.map(t => ({ ...t, role: t.role || 'technicien' })),
+  ];
+
+  console.log('✅ [fetchAllUsers] Fallback chargé:', users.length, {
+    superviseurs: superviseurs.length,
+    techniciens: techniciens.length,
+  });
+
+  return users;
+};
+
+/**
+ * Récupère le compteur de notifications non lues
+ * avec fallback si la route n'existe pas
+ */
+export const fetchUnreadCount = async () => {
+  try {
+    const data = await api.get('/notifications/compte-non-lues');
+    return data?.count || data?.data?.count || 0;
+  } catch (e) {
+    console.warn('⚠️ [fetchUnreadCount] Route inaccessible, compteur = 0');
+    return 0;
+  }
+};
+
+// =========================================================
 // EXPORT DE L'INSTANCE AXIOS (pour les appels génériques)
 // =========================================================
 
-// ✅ CORRECTION : export nommé de `api` pour que AuthContext.js puisse l'importer
 export { api };
 
 // Export par défaut (compatible avec l'ancien code)

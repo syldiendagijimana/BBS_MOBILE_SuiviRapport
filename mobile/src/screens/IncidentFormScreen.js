@@ -1,6 +1,6 @@
 // mobile/src/screens/IncidentFormScreen.js
-// Version avec pré-remplissage automatique du technicien connecté
-// + gestion du cas "profil technicien introuvable"
+// Version avec sélection d'un UTILISATEUR (admin, DJ, superviseur, technicien)
+// + pré-remplissage automatique pour le technicien connecté
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -17,12 +17,13 @@ import {
   Modal,
   TextInput,
   FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GradientHeader from '../components/GradientHeader';
 
-import { incidentsAPI, techniciensAPI } from '../services/api';
+import { incidentsAPI, fetchAllUsers } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card } from '../components';
 import { Colors, Spacing, Typography, Radius, Shadows } from '../theme';
@@ -54,7 +55,54 @@ const STATUTS_INCIDENT = [
 ];
 
 // =========================================================
-// COMPOSANT SÉLECTEUR RECHERCHABLE (avec allowCustom et disabled)
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    shortLabel: 'Admin',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    shortLabel: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    shortLabel: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    shortLabel: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) return {
+    label: 'Utilisateur',
+    shortLabel: 'Utilisateur',
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    shortLabel: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+};
+
+// =========================================================
+// COMPOSANT SÉLECTEUR RECHERCHABLE
 // =========================================================
 
 function SearchableSelector({
@@ -173,12 +221,17 @@ function SearchableSelector({
                         color={item.color || Colors.textSecondary}
                       />
                     )}
-                    <Text style={[
-                      styles.modalListItemText,
-                      value === item.value && { color: item.color || Colors.primary, fontWeight: '600' },
-                    ]}>
-                      {item.label}
-                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[
+                        styles.modalListItemText,
+                        value === item.value && { color: item.color || Colors.primary, fontWeight: '600' },
+                      ]}>
+                        {item.label}
+                      </Text>
+                      {item.subtitle && (
+                        <Text style={styles.modalListItemSubtitle}>{item.subtitle}</Text>
+                      )}
+                    </View>
                   </View>
                   {value === item.value && (
                     <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />
@@ -236,66 +289,78 @@ export default function IncidentFormScreen() {
   const [statut, setStatut] = useState(editIncident?.statut || 'ouvert');
   const [zone, setZone] = useState(editIncident?.zone || '');
   const [solutionApportee, setSolutionApportee] = useState(editIncident?.solution_apportee || '');
-  const [technicienId, setTechnicienId] = useState(editIncident?.technicien_id || null);
   const [clientAppele, setClientAppele] = useState(editIncident?.client_appele || 0);
   const [latitude, setLatitude] = useState(editIncident?.latitude ? String(editIncident.latitude) : '');
   const [longitude, setLongitude] = useState(editIncident?.longitude ? String(editIncident.longitude) : '');
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
-  const [techniciens, setTechniciens] = useState([]);
   const [formValid, setFormValid] = useState(false);
   const [profileMissing, setProfileMissing] = useState(false);
+
+  // 🎯 SÉLECTION DE L'UTILISATEUR (au lieu de technicien)
+  const [selectedUserId, setSelectedUserId] = useState(
+    editIncident?.user_id || editIncident?.technicien_id || null
+  );
+  const [allUsers, setAllUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
   // =========================================================
-  // CHARGEMENT DES TECHNICIENS + PRÉ-REMPLISSAGE
+  // CHARGEMENT DES UTILISATEURS + PRÉ-REMPLISSAGE
   // =========================================================
 
   useEffect(() => {
     const load = async () => {
+      setLoadingUsers(true);
       try {
-        const res = await techniciensAPI.list();
-        let techs = [];
-        if (Array.isArray(res)) {
-          techs = res;
-        } else if (res && Array.isArray(res.data)) {
-          techs = res.data;
-        } else if (res && res.data && Array.isArray(res.data.data)) {
-          techs = res.data.data;
-        } else {
-          techs = [];
-        }
-        setTechniciens(techs);
-
-        // ✅ Pré-remplir avec le technicien connecté si l'utilisateur est technicien
+        // 🎯 Cas : technicien connecté → pré-remplir avec son user_id
         if (user && user.role === 'technicien') {
-          const tech = techs.find(t => t.utilisateur_id === user.id);
-          if (tech) {
-            setTechnicienId(tech.id);
+          if (user.id) {
+            setSelectedUserId(user.id);
             setProfileMissing(false);
           } else {
             setProfileMissing(true);
-            // ❌ Afficher une alerte non bloquante pour informer l'utilisateur
             Alert.alert(
-              '⚠️ Profil technicien manquant',
-              'Votre compte utilisateur n\'est pas associé à un profil technicien. Veuillez contacter un administrateur pour créer votre profil.',
-              [{ text: 'OK', style: 'default' }]
+              '⚠️ Profil manquant',
+              "Votre compte n'est pas correctement configuré. Contactez un administrateur.",
+              [{ text: 'OK' }]
             );
           }
-        } else {
-          setProfileMissing(false);
         }
+
+        // 🎯 Charger TOUS les utilisateurs (admin, DJ, superviseur, technicien)
+        const usersList = await fetchAllUsers().catch(() => []);
+        setAllUsers(usersList || []);
+        console.log('✅ Utilisateurs chargés:', usersList?.length);
+
+        // Si on est en édition et qu'il y a déjà un user_id/technicien_id
+        if (editIncident?.user_id) {
+          setSelectedUserId(editIncident.user_id);
+        } else if (editIncident?.technicien_id) {
+          // Résoudre le user_id depuis le technicien_id
+          const tech = (usersList || []).find(u => u.id === editIncident.technicien_id);
+          if (tech) {
+            setSelectedUserId(tech.id);
+          } else {
+            // Chercher dans tous les utilisateurs par technicien_id
+            setSelectedUserId(editIncident.technicien_id);
+          }
+        }
+
+        setProfileMissing(false);
       } catch (error) {
-        console.error('❌ Erreur chargement techniciens:', error);
-        setTechniciens([]);
+        console.error('❌ Erreur chargement utilisateurs:', error);
+        setAllUsers([]);
+      } finally {
+        setLoadingUsers(false);
       }
     };
     load();
-  }, [user]);
+  }, [user, editIncident]);
 
   // =========================================================
   // ANIMATIONS
@@ -349,22 +414,9 @@ export default function IncidentFormScreen() {
       return;
     }
 
-    // ✅ Vérification que le technicien est bien assigné
-    if (!technicienId) {
-      Alert.alert('Erreur', 'Veuillez sélectionner un technicien pour cet incident.');
-      return;
-    }
-
-    // ✅ Vérification du type numérique
-    if (isNaN(Number(technicienId))) {
-      Alert.alert('Erreur', 'Veuillez sélectionner un technicien valide.');
-      return;
-    }
-
-    // ✅ Vérification que le technicien existe dans la liste
-    const technicienExists = techniciens.some(t => t.id === Number(technicienId));
-    if (!technicienExists) {
-      Alert.alert('Erreur', 'Le technicien sélectionné n\'existe pas.');
+    // ✅ Vérification que l'utilisateur est bien assigné
+    if (!selectedUserId) {
+      Alert.alert('Erreur', 'Veuillez sélectionner un utilisateur pour cet incident.');
       return;
     }
 
@@ -380,7 +432,8 @@ export default function IncidentFormScreen() {
         client_appele: clientAppele,
       };
       if (solutionApportee) data.solution_apportee = solutionApportee.trim();
-      if (technicienId) data.technicien_id = Number(technicienId);
+      // 🎯 Envoyer user_id
+      data.user_id = Number(selectedUserId);
       if (latitude) data.latitude = parseFloat(latitude);
       if (longitude) data.longitude = parseFloat(longitude);
 
@@ -456,11 +509,11 @@ export default function IncidentFormScreen() {
         statut !== (editIncident?.statut || 'ouvert') ||
         zone !== (editIncident?.zone || '') ||
         solutionApportee !== (editIncident?.solution_apportee || '') ||
-        technicienId !== (editIncident?.technicien_id || null) ||
+        selectedUserId !== (editIncident?.user_id || editIncident?.technicien_id || null) ||
         clientAppele !== (editIncident?.client_appele || 0)
       );
     }
-    return titre !== '' || description !== '' || typeIncident !== '' || zone !== '' || solutionApportee !== '' || technicienId !== null;
+    return titre !== '' || description !== '' || typeIncident !== '' || zone !== '' || solutionApportee !== '' || selectedUserId !== null;
   };
 
   const getSeveriteColor = (value) => {
@@ -468,15 +521,23 @@ export default function IncidentFormScreen() {
     return found ? found.color : Colors.textMuted;
   };
 
-  // ✅ Construction des options pour techniciens
-  const technicienOptions = (techniciens || [])
-    .filter(t => t.disponible === 1)
-    .map(t => ({
-      label: `${t.prenom} ${t.nom} (${t.matricule})`,
-      value: t.id,
-      icon: 'person-outline',
-      color: Colors.primary,
-    }));
+  // 🎯 Construction des options utilisateurs avec badge de rôle
+  const userOptions = allUsers.map(u => {
+    const roleConf = getRoleConfig(u.role);
+    return {
+      label: `${u.prenom} ${u.nom}`,
+      subtitle: `${roleConf.label}${u.email ? ' • ' + u.email : ''}`,
+      value: u.id,
+      icon: roleConf.icon,
+      color: roleConf.color,
+      role: (u.role || '').toLowerCase(),
+    };
+  });
+
+  const getUserColor = (value) => {
+    const found = userOptions.find(o => o.value === value);
+    return found?.color || Colors.textMuted;
+  };
 
   // =========================================================
   // RENDU
@@ -508,8 +569,8 @@ export default function IncidentFormScreen() {
             )}
             <TouchableOpacity
               onPress={handleSave}
-              disabled={loading || !formValid || (isTechnicien && !technicienId)}
-              style={[styles.headerActionBtn, styles.saveBtn, (!formValid || loading || (isTechnicien && !technicienId)) && styles.saveBtnDisabled]}
+              disabled={loading || !formValid || !selectedUserId}
+              style={[styles.headerActionBtn, styles.saveBtn, (!formValid || loading || !selectedUserId) && styles.saveBtnDisabled]}
               activeOpacity={0.7}
             >
               <Ionicons name={loading ? 'hourglass' : 'checkmark'} size={22} color={Colors.textWhite} />
@@ -525,8 +586,7 @@ export default function IncidentFormScreen() {
         </Text>
       </Animated.View>
 
-      <Animated.ScrollView style={[styles.scroll, { opacity: fadeAnim }]}
-      contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <Animated.ScrollView style={[styles.scroll, { opacity: fadeAnim }]} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <Card style={styles.formCard}>
           <Input
             label="Titre de l'incident"
@@ -608,30 +668,44 @@ export default function IncidentFormScreen() {
             />
           )}
 
+          {/* 🎯 SÉLECTION DE L'UTILISATEUR (au lieu du technicien) */}
           <SearchableSelector
-            label="Technicien assigné"
-            value={technicienId}
-            onChange={setTechnicienId}
-            options={technicienOptions}
-            placeholder={profileMissing ? "Profil technicien manquant" : "Sélectionner un technicien"}
-            error={errors.technicienId}
-            touched={touched.technicienId}
-            onBlur={() => handleFieldBlur('technicienId')}
+            label="Utilisateur concerné"
+            value={selectedUserId}
+            onChange={setSelectedUserId}
+            options={userOptions}
+            placeholder={
+              loadingUsers
+                ? 'Chargement...'
+                : profileMissing
+                ? "Profil manquant"
+                : 'Sélectionner un utilisateur'
+            }
+            error={errors.selectedUserId}
+            touched={touched.selectedUserId}
+            onBlur={() => handleFieldBlur('selectedUserId')}
+            getOptionColor={getUserColor}
             allowCustom={false}
-            disabled={isTechnicien}
+            disabled={isTechnicien || loadingUsers}
           />
+
+          {loadingUsers && (
+            <View style={styles.loadingUsersRow}>
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.loadingUsersText}>Chargement des utilisateurs...</Text>
+            </View>
+          )}
 
           {profileMissing && isTechnicien && (
             <Text style={styles.warningText}>
-              ⚠️ Votre compte n'est pas associé à un profil technicien. Contactez l'administrateur.
+              ⚠️ Votre compte n'est pas correctement configuré. Contactez l'administrateur.
             </Text>
           )}
 
           <View style={styles.checkboxSection}>
             <Text style={styles.checkboxLabel}>Client appelé</Text>
             <View style={styles.checkboxRow}>
-              <TouchableOpacity style={[styles.checkboxOption, clientAppele === 1 && styles.checkboxOptionActive]}
-              onPress={() => setClientAppele(1)}>
+              <TouchableOpacity style={[styles.checkboxOption, clientAppele === 1 && styles.checkboxOptionActive]} onPress={() => setClientAppele(1)}>
                 <Ionicons name={clientAppele === 1 ? 'checkmark-circle' : 'ellipse-outline'} size={20} color={clientAppele === 1 ? Colors.success : Colors.textMuted} />
                 <Text style={[styles.checkboxOptionText, clientAppele === 1 && { color: Colors.success }]}>Oui</Text>
               </TouchableOpacity>
@@ -653,7 +727,7 @@ export default function IncidentFormScreen() {
             title={loading ? 'Enregistrement...' : isEdit ? 'Mettre à jour' : 'Signaler'}
             onPress={handleSave}
             loading={loading}
-            disabled={!formValid || (isTechnicien && !technicienId)}
+            disabled={!formValid || !selectedUserId}
             size="lg"
             fullWidth
             icon={isEdit ? 'refresh-outline' : 'add-outline'}
@@ -784,6 +858,19 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginLeft: 4,
     fontStyle: 'italic',
+  },
+
+  loadingUsersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: -8,
+    marginBottom: 12,
+    paddingLeft: 4,
+  },
+  loadingUsersText: {
+    fontSize: 12,
+    color: Colors.textMuted,
   },
 
   selectorContainer: {
@@ -945,10 +1032,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    flex: 1,
   },
   modalListItemText: {
     fontSize: 15,
     color: Colors.textPrimary,
+  },
+  modalListItemSubtitle: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
   },
   modalEmpty: {
     padding: 20,

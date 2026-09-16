@@ -1,8 +1,8 @@
 // mobile/src/screens/PermissionFormScreen.js
-// Version avec barres de recherche dans toutes les modales de sélection
+// Version avec sélection d'un utilisateur unique (admin, DJ, superviseur ou technicien)
 // Utilise la même liste exhaustive de types de permission que PermissionsScreen
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -21,14 +21,13 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GradientHeader from '../components/GradientHeader';
 
-import { permissionsAPI, superviseursAPI, techniciensAPI } from '../services/api';
+import { permissionsAPI, fetchAllUsers } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { Button, Input, Selector, Card } from '../components';
+import { Button, Card } from '../components';
 import { Colors, Spacing, Typography, Radius, Shadows } from '../theme';
 
 // =========================================================
 // CONSTANTES - LISTE EXHAUSTIVE DES PERMISSIONS
-// (identique à celle de PermissionsScreen)
 // =========================================================
 
 const TYPES_PERMISSION = [
@@ -93,6 +92,61 @@ const TYPES_PERMISSION = [
 ];
 
 // =========================================================
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+    bgColor: Colors.danger + '15',
+    textColor: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+    bgColor: Colors.accent + '15',
+    textColor: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+    bgColor: Colors.primary + '15',
+    textColor: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+    bgColor: Colors.secondary + '15',
+    textColor: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) {
+    return {
+      label: 'Utilisateur',
+      icon: 'person-outline',
+      color: Colors.textMuted,
+      bgColor: Colors.textMuted + '15',
+      textColor: Colors.textMuted,
+    };
+  }
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+    bgColor: Colors.textMuted + '15',
+    textColor: Colors.textMuted,
+  };
+};
+
+// =========================================================
 // COMPOSANT PRINCIPAL
 // =========================================================
 
@@ -104,30 +158,35 @@ export default function PermissionFormScreen() {
   const editPermission = route.params?.permission;
   const isEdit = !!editPermission;
 
-  // États du formulaire
-  const [superviseurId, setSuperviseurId] = useState(editPermission?.superviseur_id || null);
-  const [technicienId, setTechnicienId] = useState(editPermission?.technicien_id || null);
+  // =========================================================
+  // ÉTATS DU FORMULAIRE
+  // =========================================================
+
+  const [selectedUserId, setSelectedUserId] = useState(
+    editPermission?.user_id ||
+    editPermission?.superviseur_id ||
+    editPermission?.technicien_id ||
+    null
+  );
+  const [selectedUserName, setSelectedUserName] = useState('');
+  const [selectedUserRole, setSelectedUserRole] = useState('');
+
   const [typePermission, setTypePermission] = useState(editPermission?.type_permission || '');
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
   const [formValid, setFormValid] = useState(false);
-  const [superviseurs, setSuperviseurs] = useState([]);
-  const [techniciens, setTechniciens] = useState([]);
-  const [selectedSuperviseurName, setSelectedSuperviseurName] = useState('');
-  const [selectedTechnicienName, setSelectedTechnicienName] = useState('');
 
-  // État de visibilité des modales
-  const [showSuperviseurModal, setShowSuperviseurModal] = useState(false);
-  const [showTechnicienModal, setShowTechnicienModal] = useState(false);
+  const [allUsers, setAllUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+
+  const [showUserModal, setShowUserModal] = useState(false);
   const [showTypeModal, setShowTypeModal] = useState(false);
 
-  // États de recherche
   const [searchType, setSearchType] = useState('');
-  const [searchSuperviseur, setSearchSuperviseur] = useState('');
-  const [searchTechnicien, setSearchTechnicien] = useState('');
+  const [searchUser, setSearchUser] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
 
-  // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
@@ -136,32 +195,42 @@ export default function PermissionFormScreen() {
   // =========================================================
 
   useEffect(() => {
+    let isMounted = true;
+
     const loadData = async () => {
+      setLoadingUsers(true);
       try {
-        const [supData, techData] = await Promise.all([
-          superviseursAPI.list(),
-          techniciensAPI.list(),
-        ]);
+        console.log('🔄 [PermissionForm] Chargement des utilisateurs...');
 
-        const supers = supData?.data || supData || [];
-        const techs = techData?.data || techData || [];
+        const users = await fetchAllUsers();
 
-        setSuperviseurs(supers);
-        setTechniciens(techs);
+        if (!isMounted) return;
 
-        if (superviseurId) {
-          const sup = supers.find(s => s.id === superviseurId);
-          if (sup) setSelectedSuperviseurName(`${sup.prenom} ${sup.nom}`);
-        }
-        if (technicienId) {
-          const tech = techs.find(t => t.id === technicienId);
-          if (tech) setSelectedTechnicienName(`${tech.prenom} ${tech.nom}`);
+        setAllUsers(users);
+        console.log('✅ [PermissionForm] Utilisateurs chargés:', users.length);
+
+        // Si en mode édition, trouver l'utilisateur sélectionné
+        if (selectedUserId) {
+          const selectedUser = users.find(u => u.id === selectedUserId);
+          if (selectedUser) {
+            setSelectedUserName(`${selectedUser.prenom} ${selectedUser.nom}`);
+            setSelectedUserRole(selectedUser.role || '');
+          }
         }
       } catch (error) {
-        console.error('❌ Erreur chargement données:', error);
+        if (!isMounted) return;
+        console.error('❌ [PermissionForm] Erreur chargement:', error);
+        setAllUsers([]);
+      } finally {
+        if (isMounted) setLoadingUsers(false);
       }
     };
+
     loadData();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // =========================================================
@@ -181,11 +250,11 @@ export default function PermissionFormScreen() {
 
   useEffect(() => {
     const newErrors = {};
-    if (!superviseurId) newErrors.superviseurId = 'Le superviseur est requis';
+    if (!selectedUserId) newErrors.selectedUserId = 'L\'utilisateur est requis';
     if (!typePermission) newErrors.typePermission = 'Le type de permission est requis';
     setErrors(newErrors);
     setFormValid(Object.keys(newErrors).length === 0);
-  }, [superviseurId, typePermission]);
+  }, [selectedUserId, typePermission]);
 
   const handleFieldBlur = (field) => {
     setTouched(prev => ({ ...prev, [field]: true }));
@@ -197,7 +266,7 @@ export default function PermissionFormScreen() {
 
   const handleSave = async () => {
     if (!formValid) {
-      setTouched({ superviseurId: true, typePermission: true });
+      setTouched({ selectedUserId: true, typePermission: true });
       Alert.alert('Erreur', 'Veuillez remplir tous les champs obligatoires.');
       return;
     }
@@ -205,10 +274,18 @@ export default function PermissionFormScreen() {
     setLoading(true);
     try {
       const data = {
-        superviseur_id: superviseurId,
         type_permission: typePermission,
       };
-      if (technicienId) data.technicien_id = technicienId;
+
+      const roleLower = (selectedUserRole || '').toLowerCase();
+
+      if (roleLower === 'superviseur') {
+        data.superviseur_id = selectedUserId;
+      } else if (roleLower === 'technicien') {
+        data.technicien_id = selectedUserId;
+      } else {
+        data.user_id = selectedUserId;
+      }
 
       if (isEdit) {
         await permissionsAPI.update(editPermission.id, data);
@@ -242,28 +319,25 @@ export default function PermissionFormScreen() {
 
   const isFormDirty = () => {
     if (isEdit) {
+      const originalUserId =
+        editPermission.user_id ||
+        editPermission.superviseur_id ||
+        editPermission.technicien_id;
       return (
-        superviseurId !== editPermission.superviseur_id ||
-        technicienId !== editPermission.technicien_id ||
+        selectedUserId !== originalUserId ||
         typePermission !== editPermission.type_permission
       );
     }
-    return superviseurId !== null || technicienId !== null || typePermission !== '';
+    return selectedUserId !== null || typePermission !== '';
   };
 
-  const handleSelectSuperviseur = (sup) => {
-    setSuperviseurId(sup.id);
-    setSelectedSuperviseurName(`${sup.prenom} ${sup.nom}`);
-    setShowSuperviseurModal(false);
-    setSearchSuperviseur('');
-    handleFieldBlur('superviseurId');
-  };
-
-  const handleSelectTechnicien = (tech) => {
-    setTechnicienId(tech.id);
-    setSelectedTechnicienName(`${tech.prenom} ${tech.nom}`);
-    setShowTechnicienModal(false);
-    setSearchTechnicien('');
+  const handleSelectUser = (userItem) => {
+    setSelectedUserId(userItem.id);
+    setSelectedUserName(`${userItem.prenom} ${userItem.nom}`);
+    setSelectedUserRole(userItem.role || '');
+    setShowUserModal(false);
+    setSearchUser('');
+    handleFieldBlur('selectedUserId');
   };
 
   const handleSelectType = (type) => {
@@ -273,8 +347,23 @@ export default function PermissionFormScreen() {
     handleFieldBlur('typePermission');
   };
 
+  const handleRetryLoadUsers = async () => {
+    setLoadingUsers(true);
+    try {
+      const users = await fetchAllUsers();
+      setAllUsers(users);
+      console.log('✅ [PermissionForm] Rechargement réussi:', users.length);
+    } catch (e) {
+      console.error('❌ Erreur rechargement:', e);
+      Alert.alert('Erreur', 'Impossible de charger les utilisateurs');
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
   const getTypeInfo = (typeValue) => TYPES_PERMISSION.find(t => t.value === typeValue);
   const selectedTypeInfo = getTypeInfo(typePermission);
+  const selectedRoleConfig = getRoleConfig(selectedUserRole);
 
   // Filtres pour les listes
   const filteredTypes = TYPES_PERMISSION.filter(type =>
@@ -282,16 +371,94 @@ export default function PermissionFormScreen() {
     type.description.toLowerCase().includes(searchType.toLowerCase())
   );
 
-  const filteredSuperviseurs = superviseurs.filter(sup =>
-    `${sup.prenom} ${sup.nom}`.toLowerCase().includes(searchSuperviseur.toLowerCase()) ||
-    (sup.zone_responsable && sup.zone_responsable.toLowerCase().includes(searchSuperviseur.toLowerCase()))
-  );
+  const filteredUsers = allUsers.filter(u => {
+    const fullName = `${u.prenom || ''} ${u.nom || ''}`.toLowerCase();
+    const search = searchUser.toLowerCase();
+    const role = (u.role || '').toLowerCase();
 
-  const filteredTechniciens = techniciens.filter(tech =>
-    `${tech.prenom} ${tech.nom}`.toLowerCase().includes(searchTechnicien.toLowerCase()) ||
-    (tech.matricule && tech.matricule.toLowerCase().includes(searchTechnicien.toLowerCase())) ||
-    (tech.specialite && tech.specialite.toLowerCase().includes(searchTechnicien.toLowerCase()))
-  );
+    const matchesSearch =
+      fullName.includes(search) ||
+      role.includes(search) ||
+      (u.matricule && u.matricule.toLowerCase().includes(search)) ||
+      (u.zone_responsable && u.zone_responsable.toLowerCase().includes(search)) ||
+      (u.specialite && u.specialite.toLowerCase().includes(search)) ||
+      (u.email && u.email.toLowerCase().includes(search));
+
+    const matchesRole =
+      roleFilter === 'all' || role === roleFilter.toLowerCase();
+
+    return matchesSearch && matchesRole;
+  });
+
+  const usersByRole = {
+    admin: filteredUsers.filter(u => (u.role || '').toLowerCase() === 'admin'),
+    dj: filteredUsers.filter(u => (u.role || '').toLowerCase() === 'dj'),
+    superviseur: filteredUsers.filter(u => (u.role || '').toLowerCase() === 'superviseur'),
+    technicien: filteredUsers.filter(u => (u.role || '').toLowerCase() === 'technicien'),
+    autre: filteredUsers.filter(u => {
+      const r = (u.role || '').toLowerCase();
+      return !['admin', 'dj', 'superviseur', 'technicien'].includes(r);
+    }),
+  };
+
+  const roleFilters = [
+    { key: 'all', label: 'Tous', icon: 'people-outline', count: filteredUsers.length },
+    { key: 'admin', label: 'Admins', icon: 'shield-checkmark-outline', count: usersByRole.admin.length },
+    { key: 'dj', label: 'DJ', icon: 'musical-notes-outline', count: usersByRole.dj.length },
+    { key: 'superviseur', label: 'Superviseurs', icon: 'briefcase-outline', count: usersByRole.superviseur.length },
+    { key: 'technicien', label: 'Techniciens', icon: 'construct-outline', count: usersByRole.technicien.length },
+  ];
+
+  // =========================================================
+  // RENDU SECTION UTILISATEURS
+  // =========================================================
+
+  const renderUserSection = (title, icon, color, users) => {
+    if (users.length === 0) return null;
+    return (
+      <View key={title}>
+        <View style={styles.sectionHeader}>
+          <Ionicons name={icon} size={16} color={color} />
+          <Text style={styles.sectionHeaderText}>{title}</Text>
+          <View style={[styles.sectionCount, { backgroundColor: color + '20' }]}>
+            <Text style={[styles.sectionCountText, { color }]}>{users.length}</Text>
+          </View>
+        </View>
+        {users.map(u => {
+          const roleConf = getRoleConfig(u.role);
+          return (
+            <TouchableOpacity
+              key={u.id}
+              style={[styles.optionItem, selectedUserId === u.id && styles.optionItemSelected]}
+              onPress={() => handleSelectUser(u)}
+            >
+              <View style={[styles.optionAvatar, { backgroundColor: roleConf.bgColor }]}>
+                <Text style={[styles.optionAvatarText, { color: roleConf.textColor }]}>
+                  {u.prenom?.[0]}{u.nom?.[0]}
+                </Text>
+              </View>
+              <View style={styles.optionInfo}>
+                <View style={styles.optionNameRow}>
+                  <Text style={styles.optionName}>{u.prenom} {u.nom}</Text>
+                  <View style={[styles.roleBadgeSmall, { backgroundColor: roleConf.bgColor }]}>
+                    <Text style={[styles.roleBadgeSmallText, { color: roleConf.textColor }]}>
+                      {roleConf.label}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.optionDetail} numberOfLines={1}>
+                  {u.email || u.matricule || u.zone_responsable || u.specialite || 'Utilisateur'}
+                </Text>
+              </View>
+              {selectedUserId === u.id && (
+                <Ionicons name="checkmark-circle" size={24} color={roleConf.color} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
 
   // =========================================================
   // RENDU
@@ -383,93 +550,70 @@ export default function PermissionFormScreen() {
             ) : null}
           </View>
 
-          {/* Superviseur */}
+          {/* Utilisateur */}
           <View style={styles.selectorSection}>
-            <Text style={styles.selectorLabel}>Superviseur</Text>
+            <Text style={styles.selectorLabel}>Utilisateur concerné</Text>
             <TouchableOpacity
-              style={[styles.selector, errors.superviseurId && styles.selectorError]}
+              style={[styles.selector, errors.selectedUserId && styles.selectorError]}
               onPress={() => {
-                setSearchSuperviseur('');
-                setShowSuperviseurModal(true);
+                setSearchUser('');
+                setRoleFilter('all');
+                setShowUserModal(true);
               }}
               activeOpacity={0.7}
             >
-              {superviseurId ? (
+              {selectedUserId ? (
                 <View style={styles.selectorSelected}>
-                  <View style={[styles.selectorAvatar, { backgroundColor: Colors.primary + '20' }]}>
-                    <Text style={[styles.selectorAvatarText, { color: Colors.primary }]}>
-                      {selectedSuperviseurName.split(' ').map(n => n[0]).join('')}
+                  <View style={[styles.selectorAvatar, { backgroundColor: selectedRoleConfig.bgColor }]}>
+                    <Text style={[styles.selectorAvatarText, { color: selectedRoleConfig.textColor }]}>
+                      {selectedUserName.split(' ').map(n => n[0]).join('')}
                     </Text>
                   </View>
                   <View style={styles.selectorInfo}>
-                    <Text style={styles.selectorName}>{selectedSuperviseurName}</Text>
-                    <Text style={styles.selectorDetail}>
-                      {superviseurs.find(s => s.id === superviseurId)?.zone_responsable || 'Superviseur'}
+                    <View style={styles.selectorNameRow}>
+                      <Text style={styles.selectorName}>{selectedUserName}</Text>
+                      <View style={[styles.roleBadge, { backgroundColor: selectedRoleConfig.bgColor }]}>
+                        <Text style={[styles.roleBadgeText, { color: selectedRoleConfig.textColor }]}>
+                          {selectedRoleConfig.label}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.selectorDetail} numberOfLines={1}>
+                      {allUsers.find(u => u.id === selectedUserId)?.email ||
+                       allUsers.find(u => u.id === selectedUserId)?.matricule ||
+                       allUsers.find(u => u.id === selectedUserId)?.zone_responsable ||
+                       allUsers.find(u => u.id === selectedUserId)?.specialite ||
+                       'Utilisateur'}
                     </Text>
                   </View>
                 </View>
               ) : (
                 <View style={styles.selectorPlaceholder}>
                   <Ionicons name="person-outline" size={20} color={Colors.textMuted} />
-                  <Text style={styles.selectorPlaceholderText}>Sélectionner un superviseur</Text>
+                  <Text style={styles.selectorPlaceholderText}>Sélectionner un utilisateur</Text>
                 </View>
               )}
               <Ionicons name="chevron-down" size={20} color={Colors.textMuted} />
             </TouchableOpacity>
-            {touched.superviseurId && errors.superviseurId ? (
-              <Text style={styles.errorText}>{errors.superviseurId}</Text>
+            {touched.selectedUserId && errors.selectedUserId ? (
+              <Text style={styles.errorText}>{errors.selectedUserId}</Text>
             ) : null}
           </View>
 
-          {/* Technicien (optionnel) */}
-          <View style={styles.selectorSection}>
-            <Text style={styles.selectorLabel}>Technicien concerné <Text style={styles.optionalLabel}>(optionnel)</Text></Text>
-            <TouchableOpacity
-              style={styles.selector}
-              onPress={() => {
-                setSearchTechnicien('');
-                setShowTechnicienModal(true);
-              }}
-              activeOpacity={0.7}
-            >
-              {technicienId ? (
-                <View style={styles.selectorSelected}>
-                  <View style={[styles.selectorAvatar, { backgroundColor: Colors.secondary + '20' }]}>
-                    <Text style={[styles.selectorAvatarText, { color: Colors.secondary }]}>
-                      {selectedTechnicienName.split(' ').map(n => n[0]).join('')}
-                    </Text>
-                  </View>
-                  <View style={styles.selectorInfo}>
-                    <Text style={styles.selectorName}>{selectedTechnicienName}</Text>
-                    <Text style={styles.selectorDetail}>
-                      {techniciens.find(t => t.id === technicienId)?.matricule || 'Technicien'}
-                    </Text>
-                  </View>
-                </View>
-              ) : (
-                <View style={styles.selectorPlaceholder}>
-                  <Ionicons name="construct-outline" size={20} color={Colors.textMuted} />
-                  <Text style={styles.selectorPlaceholderText}>Sélectionner un technicien (optionnel)</Text>
-                </View>
-              )}
-              <Ionicons name="chevron-down" size={20} color={Colors.textMuted} />
-            </TouchableOpacity>
-          </View>
-
           {/* Aperçu de la permission */}
-          {typePermission && superviseurId && (
+          {typePermission && selectedUserId && (
             <View style={styles.previewSection}>
               <Text style={styles.previewTitle}>📋 Aperçu de la permission</Text>
               <View style={styles.previewItem}>
-                <Ionicons name="person-outline" size={16} color={Colors.textMuted} />
-                <Text style={styles.previewText}>Superviseur: {selectedSuperviseurName}</Text>
+                <Ionicons
+                  name={selectedRoleConfig.icon}
+                  size={16}
+                  color={selectedRoleConfig.color}
+                />
+                <Text style={styles.previewText}>
+                  {selectedRoleConfig.label}: {selectedUserName}
+                </Text>
               </View>
-              {technicienId && (
-                <View style={styles.previewItem}>
-                  <Ionicons name="construct-outline" size={16} color={Colors.textMuted} />
-                  <Text style={styles.previewText}>Technicien: {selectedTechnicienName}</Text>
-                </View>
-              )}
               <View style={styles.previewItem}>
                 <Ionicons name="key-outline" size={16} color={selectedTypeInfo?.color || Colors.textMuted} />
                 <Text style={[styles.previewText, { color: selectedTypeInfo?.color || Colors.textMuted }]}>
@@ -525,7 +669,7 @@ export default function PermissionFormScreen() {
               )}
             </View>
 
-            <ScrollView style={styles.modalList}>
+            <ScrollView style={styles.modalList} keyboardShouldPersistTaps="handled">
               {filteredTypes.length > 0 ? (
                 filteredTypes.map(type => (
                   <TouchableOpacity
@@ -555,13 +699,13 @@ export default function PermissionFormScreen() {
         </View>
       </Modal>
 
-      {/* MODAL SUPERVISEURS AVEC RECHERCHE */}
-      <Modal visible={showSuperviseurModal} transparent animationType="slide" onRequestClose={() => setShowSuperviseurModal(false)}>
+      {/* MODAL UTILISATEURS AVEC RECHERCHE ET FILTRES */}
+      <Modal visible={showUserModal} transparent animationType="slide" onRequestClose={() => setShowUserModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Sélectionner un superviseur</Text>
-              <TouchableOpacity onPress={() => setShowSuperviseurModal(false)}>
+              <Text style={styles.modalTitle}>Sélectionner un utilisateur</Text>
+              <TouchableOpacity onPress={() => setShowUserModal(false)}>
                 <Ionicons name="close" size={24} color={Colors.textPrimary} />
               </TouchableOpacity>
             </View>
@@ -570,117 +714,90 @@ export default function PermissionFormScreen() {
               <Ionicons name="search-outline" size={20} color={Colors.textMuted} />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Rechercher un superviseur..."
-                value={searchSuperviseur}
-                onChangeText={setSearchSuperviseur}
+                placeholder="Rechercher par nom, email, rôle..."
+                value={searchUser}
+                onChangeText={setSearchUser}
                 autoFocus
                 placeholderTextColor={Colors.textMuted}
               />
-              {searchSuperviseur.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchSuperviseur('')}>
+              {searchUser.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchUser('')}>
                   <Ionicons name="close-circle" size={20} color={Colors.textMuted} />
                 </TouchableOpacity>
               )}
             </View>
 
-            <ScrollView style={styles.modalList}>
-              {filteredSuperviseurs.length > 0 ? (
-                filteredSuperviseurs.map(sup => (
+            {/* Filtres par rôle */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.roleFiltersContainer}
+              contentContainerStyle={styles.roleFiltersContent}
+            >
+              {roleFilters.map(filter => {
+                const isActive = roleFilter === filter.key;
+                return (
                   <TouchableOpacity
-                    key={sup.id}
-                    style={[styles.optionItem, superviseurId === sup.id && styles.optionItemSelected]}
-                    onPress={() => handleSelectSuperviseur(sup)}
+                    key={filter.key}
+                    style={[styles.roleFilterChip, isActive && styles.roleFilterChipActive]}
+                    onPress={() => setRoleFilter(filter.key)}
                   >
-                    <View style={[styles.optionAvatar, { backgroundColor: Colors.primary + '20' }]}>
-                      <Text style={[styles.optionAvatarText, { color: Colors.primary }]}>{sup.prenom?.[0]}{sup.nom?.[0]}</Text>
-                    </View>
-                    <View style={styles.optionInfo}>
-                      <Text style={styles.optionName}>{sup.prenom} {sup.nom}</Text>
-                      <Text style={styles.optionDetail}>{sup.zone_responsable || 'Superviseur'} • Niveau {sup.niveau_experience}</Text>
-                    </View>
-                    {superviseurId === sup.id && <Ionicons name="checkmark-circle" size={24} color={Colors.primary} />}
+                    <Ionicons
+                      name={filter.icon}
+                      size={14}
+                      color={isActive ? Colors.textWhite : Colors.textSecondary}
+                    />
+                    <Text style={[styles.roleFilterText, isActive && styles.roleFilterTextActive]}>
+                      {filter.label}
+                    </Text>
+                    {filter.count > 0 && (
+                      <View style={[styles.roleFilterCount, isActive && styles.roleFilterCountActive]}>
+                        <Text style={[styles.roleFilterCountText, isActive && styles.roleFilterCountTextActive]}>
+                          {filter.count}
+                        </Text>
+                      </View>
+                    )}
                   </TouchableOpacity>
-                ))
+                );
+              })}
+            </ScrollView>
+
+            <ScrollView style={styles.modalList} keyboardShouldPersistTaps="handled">
+              {loadingUsers ? (
+                <View style={styles.modalEmpty}>
+                  <Ionicons name="hourglass-outline" size={48} color={Colors.textMuted} />
+                  <Text style={styles.modalEmptyText}>Chargement des utilisateurs...</Text>
+                </View>
+              ) : filteredUsers.length > 0 ? (
+                <>
+                  {renderUserSection('Administrateurs', 'shield-checkmark-outline', Colors.danger, usersByRole.admin)}
+                  {renderUserSection('DJ', 'musical-notes-outline', Colors.accent, usersByRole.dj)}
+                  {renderUserSection('Superviseurs', 'briefcase-outline', Colors.primary, usersByRole.superviseur)}
+                  {renderUserSection('Techniciens', 'construct-outline', Colors.secondary, usersByRole.technicien)}
+                  {renderUserSection('Autres', 'person-outline', Colors.textMuted, usersByRole.autre)}
+                </>
               ) : (
                 <View style={styles.modalEmpty}>
-                  <Text style={styles.modalEmptyText}>Aucun superviseur trouvé</Text>
+                  <Ionicons name="people-outline" size={48} color={Colors.textMuted} />
+                  <Text style={styles.modalEmptyText}>
+                    {allUsers.length === 0
+                      ? 'Aucun utilisateur disponible'
+                      : 'Aucun utilisateur trouvé'}
+                  </Text>
+                  {allUsers.length === 0 && (
+                    <TouchableOpacity
+                      style={styles.retryBtn}
+                      onPress={handleRetryLoadUsers}
+                    >
+                      <Ionicons name="refresh-outline" size={16} color={Colors.textWhite} />
+                      <Text style={styles.retryBtnText}>Réessayer</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               )}
             </ScrollView>
 
-            <Button title="Annuler" variant="ghost" onPress={() => setShowSuperviseurModal(false)} fullWidth />
-          </View>
-        </View>
-      </Modal>
-
-      {/* MODAL TECHNICIENS AVEC RECHERCHE */}
-      <Modal visible={showTechnicienModal} transparent animationType="slide" onRequestClose={() => setShowTechnicienModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Sélectionner un technicien</Text>
-              <TouchableOpacity onPress={() => setShowTechnicienModal(false)}>
-                <Ionicons name="close" size={24} color={Colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.searchInputWrapper}>
-              <Ionicons name="search-outline" size={20} color={Colors.textMuted} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Rechercher un technicien..."
-                value={searchTechnicien}
-                onChangeText={setSearchTechnicien}
-                autoFocus
-                placeholderTextColor={Colors.textMuted}
-              />
-              {searchTechnicien.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchTechnicien('')}>
-                  <Ionicons name="close-circle" size={20} color={Colors.textMuted} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <ScrollView style={styles.modalList}>
-              <TouchableOpacity
-                style={[styles.optionItem, styles.optionItemFirst]}
-                onPress={() => { setTechnicienId(null); setSelectedTechnicienName(''); setShowTechnicienModal(false); setSearchTechnicien(''); }}
-              >
-                <View style={[styles.optionAvatar, { backgroundColor: Colors.textMuted + '20' }]}>
-                  <Ionicons name="person-outline" size={20} color={Colors.textMuted} />
-                </View>
-                <View style={styles.optionInfo}>
-                  <Text style={styles.optionName}>Non spécifié</Text>
-                  <Text style={styles.optionDetail}>Aucun technicien concerné</Text>
-                </View>
-                {!technicienId && <Ionicons name="checkmark-circle" size={24} color={Colors.primary} />}
-              </TouchableOpacity>
-
-              {filteredTechniciens.length > 0 ? (
-                filteredTechniciens.map(tech => (
-                  <TouchableOpacity
-                    key={tech.id}
-                    style={[styles.optionItem, technicienId === tech.id && styles.optionItemSelected]}
-                    onPress={() => handleSelectTechnicien(tech)}
-                  >
-                    <View style={[styles.optionAvatar, { backgroundColor: Colors.secondary + '20' }]}>
-                      <Text style={[styles.optionAvatarText, { color: Colors.secondary }]}>{tech.prenom?.[0]}{tech.nom?.[0]}</Text>
-                    </View>
-                    <View style={styles.optionInfo}>
-                      <Text style={styles.optionName}>{tech.prenom} {tech.nom}</Text>
-                      <Text style={styles.optionDetail}>{tech.matricule} • {tech.specialite || 'Généraliste'}</Text>
-                    </View>
-                    {technicienId === tech.id && <Ionicons name="checkmark-circle" size={24} color={Colors.secondary} />}
-                  </TouchableOpacity>
-                ))
-              ) : (
-                <View style={styles.modalEmpty}>
-                  <Text style={styles.modalEmptyText}>Aucun technicien trouvé</Text>
-                </View>
-              )}
-            </ScrollView>
-
-            <Button title="Annuler" variant="ghost" onPress={() => setShowTechnicienModal(false)} fullWidth />
+            <Button title="Annuler" variant="ghost" onPress={() => setShowUserModal(false)} fullWidth />
           </View>
         </View>
       </Modal>
@@ -840,11 +957,6 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontWeight: '500',
   },
-  optionalLabel: {
-    fontWeight: '400',
-    color: Colors.textMuted,
-    fontSize: 12,
-  },
   selector: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -878,14 +990,31 @@ const styles = StyleSheet.create({
   selectorInfo: {
     flex: 1,
   },
+  selectorNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   selectorName: {
     fontSize: 14,
     fontWeight: '500',
     color: Colors.textPrimary,
   },
+  roleBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  roleBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
   selectorDetail: {
     fontSize: 12,
     color: Colors.textMuted,
+    marginTop: 2,
   },
   selectorPlaceholder: {
     flexDirection: 'row',
@@ -938,7 +1067,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 16,
-    maxHeight: '80%',
+    maxHeight: '85%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -954,7 +1083,7 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
   modalList: {
-    maxHeight: 400,
+    maxHeight: 380,
   },
   searchInputWrapper: {
     flexDirection: 'row',
@@ -962,7 +1091,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
     borderRadius: 10,
     paddingHorizontal: 10,
-    marginVertical: 12,
+    marginTop: 12,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: Colors.border,
   },
@@ -980,6 +1110,105 @@ const styles = StyleSheet.create({
   modalEmptyText: {
     fontSize: 14,
     color: Colors.textMuted,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: Colors.primary,
+  },
+  retryBtnText: {
+    color: Colors.textWhite,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    backgroundColor: Colors.background,
+    borderRadius: 6,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  sectionHeaderText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    flex: 1,
+  },
+  sectionCount: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  sectionCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  roleFiltersContainer: {
+    maxHeight: 44,
+    marginBottom: 4,
+  },
+  roleFiltersContent: {
+    gap: 8,
+    paddingVertical: 4,
+    paddingRight: 8,
+  },
+  roleFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  roleFilterChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  roleFilterText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: Colors.textSecondary,
+  },
+  roleFilterTextActive: {
+    color: Colors.textWhite,
+    fontWeight: '600',
+  },
+  roleFilterCount: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 8,
+    backgroundColor: Colors.border,
+    minWidth: 18,
+    alignItems: 'center',
+  },
+  roleFilterCountActive: {
+    backgroundColor: 'rgba(255,255,255,0.3)',
+  },
+  roleFilterCountText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  roleFilterCountTextActive: {
+    color: Colors.textWhite,
   },
   typeOption: {
     flexDirection: 'row',
@@ -1018,13 +1247,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 12,
+    paddingHorizontal: 4,
     borderBottomWidth: 1,
     borderBottomColor: Colors.divider,
     gap: 12,
-  },
-  optionItemFirst: {
-    borderTopWidth: 1,
-    borderTopColor: Colors.divider,
   },
   optionItemSelected: {
     backgroundColor: Colors.primary + '05',
@@ -1044,10 +1270,26 @@ const styles = StyleSheet.create({
   optionInfo: {
     flex: 1,
   },
+  optionNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   optionName: {
     fontSize: 14,
     fontWeight: '500',
     color: Colors.textPrimary,
+  },
+  roleBadgeSmall: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  roleBadgeSmallText: {
+    fontSize: 9,
+    fontWeight: '700',
+    textTransform: 'uppercase',
   },
   optionDetail: {
     fontSize: 12,

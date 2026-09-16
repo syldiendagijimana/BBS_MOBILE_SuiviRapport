@@ -19,14 +19,23 @@ function getDb() {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     initSchema();
-    migratePermissions(); // <-- MIGRATION AJOUTÉE
+
+    // 🔄 MIGRATIONS AUTOMATIQUES (avant les index user_id)
+    migratePermissions();
+    migrateRapports();
+    migrateMissions();
+    migrateIncidents();
+
+    // 🔄 INDEX user_id (créés APRÈS les migrations)
+    createUserIndexes();
+
     seedData();
   }
   return db;
 }
 
 // ========================================================
-// CRÉATION DU SCHÉMA
+// CRÉATION DU SCHÉMA (SANS les index user_id)
 // ========================================================
 
 function initSchema() {
@@ -91,12 +100,12 @@ function initSchema() {
   `);
 
   // ------------------------------------------------------
-  // 4. TABLE MISSIONS
+  // 4. TABLE MISSIONS (ancienne structure)
   // ------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS missions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      superviseur_id INTEGER NOT NULL,
+      superviseur_id INTEGER,
       technicien_id INTEGER,
       titre TEXT NOT NULL,
       description TEXT,
@@ -118,7 +127,7 @@ function initSchema() {
   `);
 
   // ------------------------------------------------------
-  // 5. TABLE RAPPORTS
+  // 5. TABLE RAPPORTS (ancienne structure)
   // ------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS rapports (
@@ -160,7 +169,7 @@ function initSchema() {
   `);
 
   // ------------------------------------------------------
-  // 7. TABLE INCIDENTS
+  // 7. TABLE INCIDENTS (ancienne structure)
   // ------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS incidents (
@@ -189,7 +198,7 @@ function initSchema() {
   `);
 
   // ------------------------------------------------------
-  // 8. TABLE MESSAGES - GROUPE OFFICIEL
+  // 8. TABLE MESSAGES
   // ------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -287,28 +296,14 @@ function initSchema() {
   `);
 
   // ------------------------------------------------------
-  // 13. TABLE PERMISSIONS (avec TOUS les types possibles)
+  // 13. TABLE PERMISSIONS (ancienne structure)
   // ------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS permissions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       superviseur_id INTEGER NOT NULL,
       technicien_id INTEGER,
-      type_permission TEXT CHECK(
-        type_permission IN (
-          'creer_rapport', 'modifier_rapport', 'valider_rapport', 'supprimer_rapport', 'voir_rapports',
-          'creer_mission', 'modifier_mission', 'affecter_mission', 'changer_statut_mission', 'supprimer_mission', 'voir_missions',
-          'creer_incident', 'modifier_incident', 'resoudre_incident', 'supprimer_incident', 'voir_incidents',
-          'creer_utilisateur', 'modifier_utilisateur', 'activer_desactiver_utilisateur', 'supprimer_utilisateur', 'voir_utilisateurs',
-          'creer_technicien', 'modifier_technicien', 'supprimer_technicien', 'voir_techniciens',
-          'creer_superviseur', 'modifier_superviseur', 'supprimer_superviseur', 'voir_superviseurs',
-          'voir_reseau', 'modifier_reseau',
-          'voir_statistiques',
-          'envoyer_message', 'voir_messages',
-          'voir_historique',
-          'gerer_permissions', 'voir_permissions'
-        )
-      ),
+      type_permission TEXT,
       est_valide INTEGER DEFAULT 0,
       valide_par INTEGER,
       date_validation DATETIME,
@@ -402,7 +397,7 @@ function initSchema() {
   `);
 
   // ------------------------------------------------------
-  // 19. TABLE SUIVI_CLIENTS - Appels clients
+  // 19. TABLE SUIVI_CLIENTS
   // ------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS suivi_clients (
@@ -423,68 +418,56 @@ function initSchema() {
   `);
 
   // ------------------------------------------------------
-  // 20. INDEX POUR PERFORMANCES
+  // 20. INDEX GÉNÉRAUX (SANS les index user_id)
   // ------------------------------------------------------
   db.exec(`
-    -- Utilisateurs
     CREATE INDEX IF NOT EXISTS idx_utilisateurs_email ON utilisateurs(email);
     CREATE INDEX IF NOT EXISTS idx_utilisateurs_role ON utilisateurs(role);
     CREATE INDEX IF NOT EXISTS idx_utilisateurs_actif ON utilisateurs(actif);
 
-    -- Techniciens
     CREATE INDEX IF NOT EXISTS idx_techniciens_matricule ON techniciens(matricule);
     CREATE INDEX IF NOT EXISTS idx_techniciens_disponible ON techniciens(disponible);
     CREATE INDEX IF NOT EXISTS idx_techniciens_zone ON techniciens(zone_intervention);
 
-    -- Superviseurs
     CREATE INDEX IF NOT EXISTS idx_superviseurs_zone ON superviseurs(zone_responsable);
 
-    -- Missions
     CREATE INDEX IF NOT EXISTS idx_missions_superviseur ON missions(superviseur_id);
     CREATE INDEX IF NOT EXISTS idx_missions_technicien ON missions(technicien_id);
     CREATE INDEX IF NOT EXISTS idx_missions_statut ON missions(statut);
     CREATE INDEX IF NOT EXISTS idx_missions_date_debut ON missions(date_debut);
     CREATE INDEX IF NOT EXISTS idx_missions_priorite ON missions(priorite);
 
-    -- Rapports
     CREATE INDEX IF NOT EXISTS idx_rapports_technicien ON rapports(technicien_id);
     CREATE INDEX IF NOT EXISTS idx_rapports_mission ON rapports(mission_id);
     CREATE INDEX IF NOT EXISTS idx_rapports_statut ON rapports(statut);
     CREATE INDEX IF NOT EXISTS idx_rapports_date ON rapports(date_intervention);
 
-    -- Incidents
     CREATE INDEX IF NOT EXISTS idx_incidents_statut ON incidents(statut);
     CREATE INDEX IF NOT EXISTS idx_incidents_technicien ON incidents(technicien_id);
     CREATE INDEX IF NOT EXISTS idx_incidents_superviseur ON incidents(superviseur_id);
     CREATE INDEX IF NOT EXISTS idx_incidents_severite ON incidents(severite);
     CREATE INDEX IF NOT EXISTS idx_incidents_date ON incidents(date_incident);
 
-    -- Messages (groupe officiel)
     CREATE INDEX IF NOT EXISTS idx_messages_expediteur ON messages(expediteur_id);
     CREATE INDEX IF NOT EXISTS idx_messages_groupe_officiel ON messages(groupe_officiel_id);
     CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
     CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type_message);
     CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(message_parent_id);
 
-    -- Notifications
     CREATE INDEX IF NOT EXISTS idx_notifications_utilisateur ON notifications(utilisateur_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_lu ON notifications(est_lu);
     CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
     CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at);
 
-    -- État réseau
     CREATE INDEX IF NOT EXISTS idx_etat_reseau_zone ON etat_reseau(zone);
     CREATE INDEX IF NOT EXISTS idx_etat_reseau_statut ON etat_reseau(statut);
     CREATE INDEX IF NOT EXISTS idx_etat_reseau_verification ON etat_reseau(derniere_verification);
 
-    -- Groupe officiel
     CREATE INDEX IF NOT EXISTS idx_membres_groupe_officiel_utilisateur ON membres_groupe_officiel(utilisateur_id);
 
-    -- Historique
     CREATE INDEX IF NOT EXISTS idx_historique_actions_utilisateur ON historique_actions(utilisateur_id);
     CREATE INDEX IF NOT EXISTS idx_historique_actions_created ON historique_actions(created_at);
 
-    -- Suivi clients
     CREATE INDEX IF NOT EXISTS idx_suivi_clients_superviseur ON suivi_clients(superviseur_id);
     CREATE INDEX IF NOT EXISTS idx_suivi_clients_statut ON suivi_clients(statut);
   `);
@@ -493,102 +476,427 @@ function initSchema() {
 }
 
 // ========================================================
-// MIGRATION DE LA TABLE PERMISSIONS (ajout de tous les types)
+// 🔄 CRÉATION DES INDEX user_id (APRÈS migrations)
+// ========================================================
+
+function createUserIndexes() {
+  try {
+    console.log('🔧 Création des index user_id...');
+
+    const safeCreateIndex = (indexName, tableName, columnName) => {
+      try {
+        const cols = db.prepare(`PRAGMA table_info(${tableName})`).all().map(c => c.name);
+        if (cols.includes(columnName)) {
+          db.exec(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${tableName}(${columnName})`);
+        }
+      } catch (e) {
+        console.warn(`⚠️ Index ${indexName} non créé:`, e.message);
+      }
+    };
+
+    safeCreateIndex('idx_permissions_user', 'permissions', 'user_id');
+    safeCreateIndex('idx_permissions_superviseur', 'permissions', 'superviseur_id');
+    safeCreateIndex('idx_permissions_technicien', 'permissions', 'technicien_id');
+    safeCreateIndex('idx_permissions_type', 'permissions', 'type_permission');
+    safeCreateIndex('idx_permissions_valide', 'permissions', 'est_valide');
+
+    safeCreateIndex('idx_rapports_user', 'rapports', 'user_id');
+    safeCreateIndex('idx_missions_user', 'missions', 'user_id');
+    safeCreateIndex('idx_incidents_user', 'incidents', 'user_id');
+
+    console.log('✅ Index user_id créés avec succès');
+  } catch (err) {
+    console.error('❌ Erreur création index user_id:', err.message);
+  }
+}
+
+// ========================================================
+// 🔄 MIGRATION 1 : TABLE PERMISSIONS
 // ========================================================
 
 function migratePermissions() {
   try {
-    const db = getDb();
-    // Vérifier si la table a déjà la nouvelle contrainte (présence de 'creer_rapport')
-    const createSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='permissions'").get();
-    if (createSql && createSql.sql.includes('creer_rapport')) {
+    console.log('🔍 Vérification de la table permissions...');
+
+    const cols = db.prepare("PRAGMA table_info(permissions)").all();
+    const colNames = cols.map(c => c.name);
+    const hasUserId = colNames.includes('user_id');
+    const superviseurCol = cols.find(c => c.name === 'superviseur_id');
+    const superviseurIsNullable = superviseurCol && superviseurCol.notnull === 0;
+
+    console.log(`   - user_id présent : ${hasUserId ? '✅' : '❌'}`);
+    console.log(`   - superviseur_id nullable : ${superviseurIsNullable ? '✅' : '❌'}`);
+
+    if (hasUserId && superviseurIsNullable) {
       console.log('✅ Table permissions déjà à jour.');
       return;
     }
 
-    console.log('🔄 Migration de la table permissions...');
-    db.exec('PRAGMA foreign_keys = OFF');
+    const rows = db.prepare('SELECT * FROM permissions').all();
+    console.log(`💾 ${rows.length} permission(s) sauvegardée(s)`);
 
-    // 1. Créer une nouvelle table avec la bonne contrainte (nom temporaire)
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN TRANSACTION');
+
     db.exec(`
       CREATE TABLE permissions_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        superviseur_id INTEGER NOT NULL,
+        user_id INTEGER,
+        superviseur_id INTEGER,
         technicien_id INTEGER,
-        type_permission TEXT CHECK(
-          type_permission IN (
-            'creer_rapport', 'modifier_rapport', 'valider_rapport', 'supprimer_rapport', 'voir_rapports',
-            'creer_mission', 'modifier_mission', 'affecter_mission', 'changer_statut_mission', 'supprimer_mission', 'voir_missions',
-            'creer_incident', 'modifier_incident', 'resoudre_incident', 'supprimer_incident', 'voir_incidents',
-            'creer_utilisateur', 'modifier_utilisateur', 'activer_desactiver_utilisateur', 'supprimer_utilisateur', 'voir_utilisateurs',
-            'creer_technicien', 'modifier_technicien', 'supprimer_technicien', 'voir_techniciens',
-            'creer_superviseur', 'modifier_superviseur', 'supprimer_superviseur', 'voir_superviseurs',
-            'voir_reseau', 'modifier_reseau',
-            'voir_statistiques',
-            'envoyer_message', 'voir_messages',
-            'voir_historique',
-            'gerer_permissions', 'voir_permissions'
-          )
-        ),
+        type_permission TEXT,
         est_valide INTEGER DEFAULT 0,
         valide_par INTEGER,
         date_validation DATETIME,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES utilisateurs(id) ON DELETE CASCADE,
         FOREIGN KEY (superviseur_id) REFERENCES superviseurs(id),
         FOREIGN KEY (technicien_id) REFERENCES techniciens(id),
         FOREIGN KEY (valide_par) REFERENCES utilisateurs(id)
       )
     `);
 
-    // 2. Copier les données existantes (uniquement celles dont le type est valide)
-    db.exec(`
-      INSERT INTO permissions_new (
-        id, superviseur_id, technicien_id, type_permission,
-        est_valide, valide_par, date_validation, created_at
-      )
-      SELECT id, superviseur_id, technicien_id, type_permission,
-             est_valide, valide_par, date_validation, created_at
-      FROM permissions
-      WHERE type_permission IN (
-        'creer_rapport', 'modifier_rapport', 'valider_rapport', 'supprimer_rapport', 'voir_rapports',
-        'creer_mission', 'modifier_mission', 'affecter_mission', 'changer_statut_mission', 'supprimer_mission', 'voir_missions',
-        'creer_incident', 'modifier_incident', 'resoudre_incident', 'supprimer_incident', 'voir_incidents',
-        'creer_utilisateur', 'modifier_utilisateur', 'activer_desactiver_utilisateur', 'supprimer_utilisateur', 'voir_utilisateurs',
-        'creer_technicien', 'modifier_technicien', 'supprimer_technicien', 'voir_techniciens',
-        'creer_superviseur', 'modifier_superviseur', 'supprimer_superviseur', 'voir_superviseurs',
-        'voir_reseau', 'modifier_reseau',
-        'voir_statistiques',
-        'envoyer_message', 'voir_messages',
-        'voir_historique',
-        'gerer_permissions', 'voir_permissions'
-      )
+    const insert = db.prepare(`
+      INSERT INTO permissions_new
+      (id, user_id, superviseur_id, technicien_id, type_permission, est_valide, valide_par, date_validation, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    // 3. Supprimer l'ancienne table
-    db.exec('DROP TABLE permissions');
+    for (const r of rows) {
+      insert.run(
+        r.id, r.user_id || null, r.superviseur_id || null, r.technicien_id || null,
+        r.type_permission, r.est_valide != null ? r.est_valide : 0,
+        r.valide_par || null, r.date_validation || null,
+        r.created_at || new Date().toISOString()
+      );
+    }
 
-    // 4. Renommer la nouvelle table pour qu'elle s'appelle `permissions`
+    db.exec('DROP TABLE permissions');
     db.exec('ALTER TABLE permissions_new RENAME TO permissions');
 
-    // 5. Réactiver les contraintes de clés étrangères
+    db.exec('COMMIT');
     db.exec('PRAGMA foreign_keys = ON');
 
-    console.log('✅ Table permissions migrée avec succès (nom final : permissions)');
+    console.log('🎉 Migration table permissions TERMINÉE');
   } catch (err) {
-    console.error('❌ Erreur lors de la migration :', err.message);
+    try { db.exec('ROLLBACK'); } catch (e) {}
+    try { db.exec('PRAGMA foreign_keys = ON'); } catch (e) {}
+    console.error('❌ Erreur migration permissions :', err.message);
   }
 }
 
 // ========================================================
-// DONNÉES INITIALES (SEULEMENT L'ADMIN)
+// 🔄 MIGRATION 2 : TABLE RAPPORTS
+// ========================================================
+
+function migrateRapports() {
+  try {
+    console.log('🔍 Vérification de la table rapports...');
+
+    const cols = db.prepare("PRAGMA table_info(rapports)").all();
+    const colNames = cols.map(c => c.name);
+    const hasUserId = colNames.includes('user_id');
+    const techCol = cols.find(c => c.name === 'technicien_id');
+    const techIsNullable = techCol && techCol.notnull === 0;
+
+    console.log(`   - user_id présent : ${hasUserId ? '✅' : '❌'}`);
+    console.log(`   - technicien_id nullable : ${techIsNullable ? '✅' : '❌'}`);
+
+    if (hasUserId && techIsNullable) {
+      console.log('✅ Table rapports déjà à jour.');
+      return;
+    }
+
+    const rows = db.prepare('SELECT * FROM rapports').all();
+    console.log(`💾 ${rows.length} rapport(s) sauvegardé(s)`);
+
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN TRANSACTION');
+
+    db.exec(`
+      CREATE TABLE rapports_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        technicien_id INTEGER,
+        mission_id INTEGER,
+        titre TEXT NOT NULL,
+        description TEXT NOT NULL,
+        solution TEXT,
+        statut TEXT CHECK(statut IN ('brouillon', 'soumis', 'approuve', 'rejete')) DEFAULT 'brouillon',
+        type_intervention TEXT CHECK(type_intervention IN ('preventive', 'corrective', 'urgente')),
+        duree_intervention INTEGER,
+        latitude REAL,
+        longitude REAL,
+        adresse TEXT,
+        date_intervention DATE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES utilisateurs(id) ON DELETE SET NULL,
+        FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE SET NULL
+      )
+    `);
+
+    const insert = db.prepare(`
+      INSERT INTO rapports_new
+      (id, user_id, technicien_id, mission_id, titre, description, solution, statut, type_intervention,
+       duree_intervention, latitude, longitude, adresse, date_intervention, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const r of rows) {
+      let resolvedUserId = r.user_id || null;
+      if (!resolvedUserId && r.technicien_id) {
+        const tech = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(r.technicien_id);
+        if (tech) resolvedUserId = tech.utilisateur_id;
+      }
+
+      insert.run(
+        r.id,
+        resolvedUserId,
+        r.technicien_id || null,
+        r.mission_id || null,
+        r.titre,
+        r.description,
+        r.solution || null,
+        r.statut || 'brouillon',
+        r.type_intervention || null,
+        r.duree_intervention || null,
+        r.latitude || null,
+        r.longitude || null,
+        r.adresse || null,
+        r.date_intervention || null,
+        r.created_at || new Date().toISOString(),
+        r.updated_at || new Date().toISOString()
+      );
+    }
+
+    db.exec('DROP TABLE rapports');
+    db.exec('ALTER TABLE rapports_new RENAME TO rapports');
+
+    db.exec('COMMIT');
+    db.exec('PRAGMA foreign_keys = ON');
+
+    console.log('🎉 Migration table rapports TERMINÉE');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch (e) {}
+    try { db.exec('PRAGMA foreign_keys = ON'); } catch (e) {}
+    console.error('❌ Erreur migration rapports :', err.message);
+  }
+}
+
+// ========================================================
+// 🔄 MIGRATION 3 : TABLE MISSIONS
+// ========================================================
+
+function migrateMissions() {
+  try {
+    console.log('🔍 Vérification de la table missions...');
+
+    const cols = db.prepare("PRAGMA table_info(missions)").all();
+    const colNames = cols.map(c => c.name);
+    const hasUserId = colNames.includes('user_id');
+
+    console.log(`   - user_id présent : ${hasUserId ? '✅' : '❌'}`);
+
+    if (hasUserId) {
+      console.log('✅ Table missions déjà à jour.');
+      return;
+    }
+
+    const rows = db.prepare('SELECT * FROM missions').all();
+    console.log(`💾 ${rows.length} mission(s) sauvegardée(s)`);
+
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN TRANSACTION');
+
+    db.exec(`
+      CREATE TABLE missions_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        superviseur_id INTEGER,
+        technicien_id INTEGER,
+        titre TEXT NOT NULL,
+        description TEXT,
+        type_mission TEXT CHECK(type_mission IN ('installation', 'maintenance', 'reparation', 'inspection', 'urgence')),
+        priorite TEXT CHECK(priorite IN ('basse', 'moyenne', 'haute', 'critique')) DEFAULT 'moyenne',
+        statut TEXT CHECK(statut IN ('planifiee', 'en_cours', 'terminee', 'annulee')) DEFAULT 'planifiee',
+        date_debut DATETIME,
+        date_fin_prevue DATETIME,
+        date_fin_reelle DATETIME,
+        adresse TEXT,
+        latitude REAL,
+        longitude REAL,
+        notes TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES utilisateurs(id) ON DELETE CASCADE
+      )
+    `);
+
+    const insert = db.prepare(`
+      INSERT INTO missions_new
+      (id, user_id, superviseur_id, technicien_id, titre, description, type_mission, priorite, statut,
+       date_debut, date_fin_prevue, date_fin_reelle, adresse, latitude, longitude, notes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const r of rows) {
+      let resolvedUserId = r.user_id || null;
+      if (!resolvedUserId && r.superviseur_id) {
+        const sup = db.prepare('SELECT utilisateur_id FROM superviseurs WHERE id = ?').get(r.superviseur_id);
+        if (sup) resolvedUserId = sup.utilisateur_id;
+      }
+
+      insert.run(
+        r.id,
+        resolvedUserId,
+        r.superviseur_id || null,
+        r.technicien_id || null,
+        r.titre,
+        r.description || null,
+        r.type_mission || null,
+        r.priorite || 'moyenne',
+        r.statut || 'planifiee',
+        r.date_debut || null,
+        r.date_fin_prevue || null,
+        r.date_fin_reelle || null,
+        r.adresse || null,
+        r.latitude || null,
+        r.longitude || null,
+        r.notes || null,
+        r.created_at || new Date().toISOString(),
+        r.updated_at || new Date().toISOString()
+      );
+    }
+
+    db.exec('DROP TABLE missions');
+    db.exec('ALTER TABLE missions_new RENAME TO missions');
+
+    db.exec('COMMIT');
+    db.exec('PRAGMA foreign_keys = ON');
+
+    console.log('🎉 Migration table missions TERMINÉE');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch (e) {}
+    try { db.exec('PRAGMA foreign_keys = ON'); } catch (e) {}
+    console.error('❌ Erreur migration missions :', err.message);
+  }
+}
+
+// ========================================================
+// 🔄 MIGRATION 4 : TABLE INCIDENTS
+// ========================================================
+
+function migrateIncidents() {
+  try {
+    console.log('🔍 Vérification de la table incidents...');
+
+    const cols = db.prepare("PRAGMA table_info(incidents)").all();
+    const colNames = cols.map(c => c.name);
+    const hasUserId = colNames.includes('user_id');
+
+    console.log(`   - user_id présent : ${hasUserId ? '✅' : '❌'}`);
+
+    if (hasUserId) {
+      console.log('✅ Table incidents déjà à jour.');
+      return;
+    }
+
+    const rows = db.prepare('SELECT * FROM incidents').all();
+    console.log(`💾 ${rows.length} incident(s) sauvegardé(s)`);
+
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN TRANSACTION');
+
+    db.exec(`
+      CREATE TABLE incidents_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        technicien_id INTEGER,
+        superviseur_id INTEGER,
+        rapport_id INTEGER,
+        titre TEXT NOT NULL,
+        description TEXT NOT NULL,
+        type_incident TEXT CHECK(type_incident IN ('panne_reseau', 'panne_client', 'securite', 'equipement', 'autre')),
+        severite TEXT CHECK(severite IN ('faible', 'moyenne', 'elevee', 'critique')) DEFAULT 'moyenne',
+        statut TEXT CHECK(statut IN ('ouvert', 'en_cours', 'resolu', 'ferme')) DEFAULT 'ouvert',
+        solution_apportee TEXT,
+        zone TEXT,
+        latitude REAL,
+        longitude REAL,
+        client_appele INTEGER DEFAULT 0,
+        date_incident DATETIME DEFAULT CURRENT_TIMESTAMP,
+        date_resolution DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES utilisateurs(id) ON DELETE SET NULL,
+        FOREIGN KEY (rapport_id) REFERENCES rapports(id) ON DELETE SET NULL
+      )
+    `);
+
+    const insert = db.prepare(`
+      INSERT INTO incidents_new
+      (id, user_id, technicien_id, superviseur_id, rapport_id, titre, description, type_incident, severite,
+       statut, solution_apportee, zone, latitude, longitude, client_appele, date_incident, date_resolution,
+       created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const r of rows) {
+      let resolvedUserId = r.user_id || null;
+      if (!resolvedUserId && r.technicien_id) {
+        const tech = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(r.technicien_id);
+        if (tech) resolvedUserId = tech.utilisateur_id;
+      } else if (!resolvedUserId && r.superviseur_id) {
+        const sup = db.prepare('SELECT utilisateur_id FROM superviseurs WHERE id = ?').get(r.superviseur_id);
+        if (sup) resolvedUserId = sup.utilisateur_id;
+      }
+
+      insert.run(
+        r.id,
+        resolvedUserId,
+        r.technicien_id || null,
+        r.superviseur_id || null,
+        r.rapport_id || null,
+        r.titre,
+        r.description,
+        r.type_incident || null,
+        r.severite || 'moyenne',
+        r.statut || 'ouvert',
+        r.solution_apportee || null,
+        r.zone || null,
+        r.latitude || null,
+        r.longitude || null,
+        r.client_appele || 0,
+        r.date_incident || new Date().toISOString(),
+        r.date_resolution || null,
+        r.created_at || new Date().toISOString(),
+        r.updated_at || new Date().toISOString()
+      );
+    }
+
+    db.exec('DROP TABLE incidents');
+    db.exec('ALTER TABLE incidents_new RENAME TO incidents');
+
+    db.exec('COMMIT');
+    db.exec('PRAGMA foreign_keys = ON');
+
+    console.log('🎉 Migration table incidents TERMINÉE');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch (e) {}
+    try { db.exec('PRAGMA foreign_keys = ON'); } catch (e) {}
+    console.error('❌ Erreur migration incidents :', err.message);
+  }
+}
+
+// ========================================================
+// DONNÉES INITIALES
 // ========================================================
 
 function seedData() {
   console.log('🔄 Insertion des données initiales...');
 
-  // ------------------------------------------------------
-  // 1. CRÉATION DU COMPTE ADMIN UNIQUE (le seul utilisateur initial)
-  // ------------------------------------------------------
+  // 1. ADMIN
   const adminExists = db.prepare("SELECT id FROM utilisateurs WHERE role = 'admin' LIMIT 1").get();
   if (!adminExists) {
     const hash = bcrypt.hashSync('Syldie@2026', 10);
@@ -599,9 +907,7 @@ function seedData() {
     console.log('✅ Compte Admin créé: syldie@bbs.bi / Syldie@2026');
   }
 
-  // ------------------------------------------------------
-  // 2. CRÉATION DU GROUPE OFFICIEL UNIQUE (avec l'admin comme créateur)
-  // ------------------------------------------------------
+  // 2. GROUPE OFFICIEL
   const groupeOfficielExists = db.prepare("SELECT id FROM groupe_officiel LIMIT 1").get();
   if (!groupeOfficielExists) {
     const admin = db.prepare("SELECT id FROM utilisateurs WHERE role = 'admin'").get();
@@ -617,22 +923,16 @@ function seedData() {
       );
       console.log('✅ Groupe Officiel BBS créé');
 
-      // Ajouter l'admin au groupe (les autres utilisateurs seront ajoutés lors de leur inscription)
       const groupeId = db.prepare("SELECT id FROM groupe_officiel LIMIT 1").get().id;
-      const adminUser = db.prepare("SELECT id FROM utilisateurs WHERE role = 'admin'").get();
-      if (adminUser) {
-        db.prepare(`
-          INSERT OR IGNORE INTO membres_groupe_officiel (groupe_officiel_id, utilisateur_id, est_admin)
-          VALUES (?, ?, ?)
-        `).run(groupeId, adminUser.id, 1);
-        console.log('✅ Admin ajouté au Groupe Officiel BBS');
-      }
+      db.prepare(`
+        INSERT OR IGNORE INTO membres_groupe_officiel (groupe_officiel_id, utilisateur_id, est_admin)
+        VALUES (?, ?, ?)
+      `).run(groupeId, admin.id, 1);
+      console.log('✅ Admin ajouté au Groupe Officiel BBS');
     }
   }
 
-  // ------------------------------------------------------
-  // 3. MESSAGE DE BIENVENUE (uniquement si aucun message n'existe)
-  // ------------------------------------------------------
+  // 3. MESSAGE DE BIENVENUE
   const messageExists = db.prepare("SELECT id FROM messages LIMIT 1").get();
   if (!messageExists) {
     const admin = db.prepare("SELECT id FROM utilisateurs WHERE role = 'admin'").get();
@@ -662,9 +962,7 @@ function seedData() {
     }
   }
 
-  // ------------------------------------------------------
-  // 4. DONNÉES DE TEST - ÉTAT DU RÉSEAU
-  // ------------------------------------------------------
+  // 4. ÉTAT DU RÉSEAU
   const reseauExists = db.prepare("SELECT id FROM etat_reseau LIMIT 1").get();
   if (!reseauExists) {
     const zones = ['Zone Nord', 'Zone Sud', 'Zone Est', 'Zone Ouest', 'Centre-ville', 'Zone Industrielle', 'Zone Résidentielle'];
@@ -702,9 +1000,7 @@ function seedData() {
     console.log('✅ Données réseau de test créées');
   }
 
-  // ------------------------------------------------------
-  // 5. STATISTIQUES INITIALES
-  // ------------------------------------------------------
+  // 5. STATISTIQUES
   const statsExists = db.prepare("SELECT id FROM statistiques LIMIT 1").get();
   if (!statsExists) {
     const typesStat = [
@@ -715,7 +1011,7 @@ function seedData() {
 
     const techCount = db.prepare("SELECT COUNT(*) as count FROM techniciens WHERE disponible = 1").get().count;
     const superCount = db.prepare("SELECT COUNT(*) as count FROM superviseurs").get().count;
-    const userCount = db.prepare("SELECT COUNT(*) as count FROM utilisateurs WHERE actif = 1").get().count;
+    const userCount = db.prepare("SELECT COUNT(*) AS count FROM utilisateurs WHERE actif = 1").get().count;
 
     const valeurs = {
       total_rapports: 0,

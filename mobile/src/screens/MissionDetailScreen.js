@@ -1,4 +1,6 @@
 // mobile/src/screens/MissionDetailScreen.js
+// Version avec affichage du rôle de l'utilisateur concerné
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -54,6 +56,95 @@ const PRIORITES = {
 };
 
 // =========================================================
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    shortLabel: 'Admin',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    shortLabel: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    shortLabel: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    shortLabel: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) return {
+    label: 'Utilisateur',
+    shortLabel: 'Utilisateur',
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    shortLabel: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+};
+
+/**
+ * Extrait le nom + rôle + infos de l'utilisateur concerné
+ */
+const getMissionUser = (mission) => {
+  if (!mission) return { fullName: '', role: null, email: null, extra: null, phone: null };
+
+  // Priorité 1 : user_id (nouveau)
+  if (mission.user_id && mission.user_nom) {
+    return {
+      fullName: `${mission.user_prenom || ''} ${mission.user_nom || ''}`.trim(),
+      role: mission.user_role || 'utilisateur',
+      email: mission.user_email || null,
+      extra: null,
+      phone: null,
+    };
+  }
+
+  // Priorité 2 : technicien
+  if (mission.technicien_nom) {
+    return {
+      fullName: `${mission.technicien_prenom || ''} ${mission.technicien_nom || ''}`.trim(),
+      role: 'technicien',
+      email: mission.technicien_email || null,
+      extra: mission.technicien_matricule || null,
+      phone: mission.technicien_telephone || null,
+    };
+  }
+
+  // Priorité 3 : superviseur
+  if (mission.superviseur_nom) {
+    return {
+      fullName: `${mission.superviseur_prenom || ''} ${mission.superviseur_nom || ''}`.trim(),
+      role: 'superviseur',
+      email: mission.superviseur_email || null,
+      extra: null,
+      phone: mission.superviseur_telephone || null,
+    };
+  }
+
+  return { fullName: '', role: null, email: null, extra: null, phone: null };
+};
+
+// =========================================================
 // COMPOSANT PRINCIPAL
 // =========================================================
 
@@ -63,19 +154,17 @@ export default function MissionDetailScreen() {
   const { user, isSuperviseur, isAdmin, isTechnicien } = useAuth();
   const missionId = route.params?.id;
 
-  // États
   const [mission, setMission] = useState(null);
   const [rapports, setRapports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showActions, setShowActions] = useState(false);
 
-  // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
   // =========================================================
-  // CHARGEMENT DES DONNÉES
+  // CHARGEMENT
   // =========================================================
 
   const loadData = useCallback(async () => {
@@ -85,7 +174,6 @@ export default function MissionDetailScreen() {
         rapportsAPI.getByMission(missionId).catch(() => ({ data: [] })),
       ]);
 
-      // L'intercepteur axios renvoie déjà response.data (l'objet { success, data })
       const missionData = missionRes?.data || missionRes;
       setMission(missionData);
 
@@ -101,7 +189,6 @@ export default function MissionDetailScreen() {
     }
   }, [missionId, navigation]);
 
-  // Animation d'entrée
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
@@ -109,7 +196,6 @@ export default function MissionDetailScreen() {
     ]).start();
   }, []);
 
-  // Chargement initial
   useEffect(() => {
     if (missionId) loadData();
   }, [missionId, loadData]);
@@ -223,6 +309,12 @@ export default function MissionDetailScreen() {
 
   const isRapportPossible = mission.statut === 'en_cours' || mission.statut === 'terminee';
 
+  // 🎯 Utilisateur concerné
+  const userInfo = getMissionUser(mission);
+  const roleConfig = getRoleConfig(userInfo.role);
+  const hasUser = !!userInfo.fullName;
+  const initials = userInfo.fullName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?';
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.primaryDark} />
@@ -246,7 +338,6 @@ export default function MissionDetailScreen() {
         </View>
       </GradientHeader>
 
-      {/* CONTENU */}
       <Animated.ScrollView
         style={[styles.scroll, { opacity: fadeAnim }]}
         contentContainerStyle={styles.scrollContent}
@@ -260,6 +351,37 @@ export default function MissionDetailScreen() {
           <Badge label={statutInfo.label} color={statutInfo.color} size="lg" style={styles.statusBadge} />
           <Badge label={prioriteInfo.label} color={prioriteInfo.color} size="lg" style={styles.prioriteBadge} />
         </View>
+
+        {/* 🎯 CARTE UTILISATEUR CONCERNÉ */}
+        {hasUser && (
+          <Card style={[styles.userCard, { borderLeftColor: roleConfig.color, borderLeftWidth: 5 }]}>
+            <View style={styles.userCardContent}>
+              <View style={[styles.userCardAvatar, { backgroundColor: roleConfig.color + '20' }]}>
+                <Text style={[styles.userCardAvatarText, { color: roleConfig.color }]}>
+                  {initials}
+                </Text>
+              </View>
+              <View style={styles.userCardInfo}>
+                <Text style={styles.userCardName}>{userInfo.fullName}</Text>
+                <View style={[styles.userCardRoleBadge, { backgroundColor: roleConfig.color + '20' }]}>
+                  <Ionicons name={roleConfig.icon} size={12} color={roleConfig.color} />
+                  <Text style={[styles.userCardRoleText, { color: roleConfig.color }]}>
+                    {roleConfig.label}
+                  </Text>
+                </View>
+                {userInfo.email && (
+                  <Text style={styles.userCardEmail} numberOfLines={1}>{userInfo.email}</Text>
+                )}
+                {userInfo.extra && (
+                  <Text style={styles.userCardExtra}>Matricule: {userInfo.extra}</Text>
+                )}
+                {userInfo.phone && (
+                  <Text style={styles.userCardExtra}>📞 {userInfo.phone}</Text>
+                )}
+              </View>
+            </View>
+          </Card>
+        )}
 
         {/* CARTE PRINCIPALE */}
         <Card style={styles.mainCard}>
@@ -317,31 +439,6 @@ export default function MissionDetailScreen() {
               <Ionicons name="open-outline" size={18} color={Colors.primary} />
             </TouchableOpacity>
           ) : null}
-        </Card>
-
-        {/* TECHNICIEN ASSIGNÉ */}
-        <SectionHeader title="Technicien assigné" icon="person-outline" />
-        <Card style={styles.technicienCard}>
-          {mission.technicien_id ? (
-            <View style={styles.technicienRow}>
-              <View style={[styles.technicienAvatar, { backgroundColor: Colors.primary + '20' }]}>
-                <Text style={[styles.technicienAvatarText, { color: Colors.primary }]}>
-                  {mission.technicien_prenom?.[0]}{mission.technicien_nom?.[0]}
-                </Text>
-              </View>
-              <View style={styles.technicienInfo}>
-                <Text style={styles.technicienName}>{mission.technicien_prenom} {mission.technicien_nom}</Text>
-                <Text style={styles.technicienDetail}>{mission.technicien_matricule} • {mission.technicien_specialite || 'Généraliste'}</Text>
-                <Text style={styles.technicienContact}>{mission.technicien_email} • {mission.technicien_telephone || 'Pas de téléphone'}</Text>
-              </View>
-              <Badge label={mission.technicien_disponible ? 'Disponible' : 'Occupé'} color={mission.technicien_disponible ? Colors.success : Colors.danger} size="sm" />
-            </View>
-          ) : (
-            <View style={styles.noTechnicien}>
-              <Ionicons name="person-outline" size={40} color={Colors.textMuted} />
-              <Text style={styles.noTechnicienText}>Aucun technicien assigné</Text>
-            </View>
-          )}
         </Card>
 
         {/* NOTES */}
@@ -460,269 +557,103 @@ const getStatutColor = (statut) => {
 // =========================================================
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
   header: {
-    paddingTop: 50,
-    paddingBottom: 16,
-    paddingHorizontal: Spacing.lg,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    ...Shadows.card,
-    elevation: 8,
+    paddingTop: 50, paddingBottom: 16, paddingHorizontal: Spacing.lg,
+    borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
+    ...Shadows.card, elevation: 8,
   },
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 40, height: 40, borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
   },
-  headerCenter: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: Spacing.sm,
-  },
+  headerCenter: { flex: 1, alignItems: 'center', paddingHorizontal: Spacing.sm },
   headerTitle: {
-    color: Colors.textWhite,
-    fontSize: 17,
-    fontWeight: '700',
-    maxWidth: '80%',
+    color: Colors.textWhite, fontSize: 17, fontWeight: '700', maxWidth: '80%',
   },
   moreBtn: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    padding: 8, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.15)',
   },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: 20,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: Spacing.md,
-  },
-  statusBadge: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-  },
-  prioriteBadge: {
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-  },
-  mainCard: {
-    padding: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  missionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 8,
-  },
-  missionDescription: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    lineHeight: 22,
-    marginBottom: 12,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: Colors.divider,
-    marginVertical: 12,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  infoIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  infoContent: {
-    flex: 1,
-  },
-  infoLabel: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  infoValue: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-    marginTop: 2,
-  },
-  infoValueLink: {
-    color: Colors.primary,
-  },
-  technicienCard: {
-    padding: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  technicienRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  technicienAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: Spacing.md,
-  },
-  technicienAvatarText: {
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  technicienInfo: {
-    flex: 1,
-  },
-  technicienName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  technicienDetail: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  technicienContact: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    marginTop: 2,
-  },
-  noTechnicien: {
-    alignItems: 'center',
-    paddingVertical: Spacing.xl,
-  },
-  noTechnicienText: {
-    fontSize: 14,
-    color: Colors.textMuted,
-    marginTop: 8,
-  },
-  notesCard: {
-    padding: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  notesText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    lineHeight: 22,
-  },
-  rapportCard: {
-    padding: Spacing.md,
-    marginBottom: 8,
-  },
-  rapportRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  rapportIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.primary + '15',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  rapportInfo: {
-    flex: 1,
-  },
-  rapportTitle: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.textPrimary,
-  },
-  rapportMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 4,
-  },
-  rapportDate: {
-    fontSize: 11,
-    color: Colors.textMuted,
-  },
-  emptyCard: {
-    padding: Spacing.xl,
-    alignItems: 'center',
-    marginBottom: Spacing.md,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: Colors.textMuted,
-    textAlign: 'center',
-  },
-  footerSpace: {
-    height: 20,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-  },
-  errorText: {
-    fontSize: 16,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    marginTop: 16,
-  },
-  actionsMenu: {
-    position: 'absolute',
-    top: 90,
-    right: 16,
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: 20 },
+  statusRow: { flexDirection: 'row', gap: 8, marginBottom: Spacing.md },
+  statusBadge: { paddingVertical: 6, paddingHorizontal: 14 },
+  prioriteBadge: { paddingVertical: 6, paddingHorizontal: 14 },
+
+  // 🎯 CARTE UTILISATEUR
+  userCard: {
+    padding: Spacing.md, marginBottom: Spacing.md,
     backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: 8,
-    ...Shadows.card,
-    elevation: 8,
-    zIndex: 999,
-    minWidth: 180,
+  },
+  userCardContent: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  userCardAvatar: {
+    width: 56, height: 56, borderRadius: 28,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  userCardAvatarText: { fontSize: 20, fontWeight: '800', letterSpacing: 0.5 },
+  userCardInfo: { flex: 1 },
+  userCardName: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary, marginBottom: 4 },
+  userCardRoleBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 5,
+  },
+  userCardRoleText: {
+    fontSize: 11, fontWeight: '800',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  userCardEmail: { fontSize: 11, color: Colors.textMuted, marginTop: 4 },
+  userCardExtra: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+
+  mainCard: { padding: Spacing.lg, marginBottom: Spacing.md },
+  missionTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary, marginBottom: 8 },
+  missionDescription: { fontSize: 14, color: Colors.textSecondary, lineHeight: 22, marginBottom: 12 },
+  divider: { height: 1, backgroundColor: Colors.divider, marginVertical: 12 },
+  infoRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+  infoIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: Colors.background,
+    justifyContent: 'center', alignItems: 'center', marginRight: 12,
+  },
+  infoContent: { flex: 1 },
+  infoLabel: {
+    fontSize: 11, color: Colors.textMuted, fontWeight: '500',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  infoValue: { fontSize: 14, color: Colors.textPrimary, marginTop: 2 },
+  infoValueLink: { color: Colors.primary },
+  notesCard: { padding: Spacing.lg, marginBottom: Spacing.md },
+  notesText: { fontSize: 14, color: Colors.textSecondary, lineHeight: 22 },
+  rapportCard: { padding: Spacing.md, marginBottom: 8 },
+  rapportRow: { flexDirection: 'row', alignItems: 'center' },
+  rapportIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: Colors.primary + '15',
+    justifyContent: 'center', alignItems: 'center', marginRight: 12,
+  },
+  rapportInfo: { flex: 1 },
+  rapportTitle: { fontSize: 14, fontWeight: '500', color: Colors.textPrimary },
+  rapportMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  rapportDate: { fontSize: 11, color: Colors.textMuted },
+  emptyCard: { padding: Spacing.xl, alignItems: 'center', marginBottom: Spacing.md },
+  emptyText: { fontSize: 14, color: Colors.textMuted, textAlign: 'center' },
+  footerSpace: { height: 20 },
+  errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+  errorText: { fontSize: 16, color: Colors.textMuted, textAlign: 'center', marginTop: 16 },
+  actionsMenu: {
+    position: 'absolute', top: 90, right: 16,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg, padding: 8,
+    ...Shadows.card, elevation: 8, zIndex: 999, minWidth: 180,
   },
   actionMenuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: Radius.sm,
-    gap: 10,
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: Radius.sm, gap: 10,
   },
-  actionMenuText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.textPrimary,
-  },
-  actionMenuDivider: {
-    height: 1,
-    backgroundColor: Colors.divider,
-    marginVertical: 4,
-  },
-  actionMenuDelete: {
-    backgroundColor: Colors.danger + '10',
-  },
+  actionMenuText: { fontSize: 14, fontWeight: '500', color: Colors.textPrimary },
+  actionMenuDivider: { height: 1, backgroundColor: Colors.divider, marginVertical: 4 },
+  actionMenuDelete: { backgroundColor: Colors.danger + '10' },
 });

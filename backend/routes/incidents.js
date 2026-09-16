@@ -7,8 +7,8 @@ const {
     isSuperviseur,
     isAdmin,
     isAdminOrDJ,
-    isSuperviseurOrAdmin,   // ✅ Modifié pour inclure 'dj' dans le middleware
-    hasPermission,          // <-- AJOUT
+    isSuperviseurOrAdmin,
+    hasPermission,
     logUserAction
 } = require('../middleware/auth');
 
@@ -19,6 +19,39 @@ const {
 const TYPES_INCIDENT = ['panne_reseau', 'panne_client', 'securite', 'equipement', 'autre'];
 const SEVERITES = ['faible', 'moyenne', 'elevee', 'critique'];
 const STATUTS_INCIDENT = ['ouvert', 'en_cours', 'resolu', 'ferme'];
+
+// ========================================================
+// 🔧 FONCTION UTILITAIRE : Résoudre user_id → technicien_id
+// ========================================================
+// Accepte un user_id (peu importe le rôle) et retourne :
+//   { user_id, technicien_id, role }
+
+function resolveUserTarget(db, userId) {
+    if (!userId) return { user_id: null, technicien_id: null, role: null };
+
+    const user = db.prepare('SELECT id, role, nom, prenom FROM utilisateurs WHERE id = ?').get(userId);
+    if (!user) return { user_id: userId, technicien_id: null, role: null, exists: false };
+
+    const role = (user.role || '').toLowerCase();
+
+    if (role === 'technicien') {
+        const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(userId);
+        return {
+            user_id: userId,
+            technicien_id: tech?.id || null,
+            role: 'technicien',
+            exists: true,
+        };
+    }
+
+    // admin, dj, superviseur → pas de technicien_id
+    return {
+        user_id: userId,
+        technicien_id: null,
+        role,
+        exists: true,
+    };
+}
 
 // ========================================================
 // ROUTES SANS PARAMÈTRE :id (DOIVENT ÊTRE AVANT /:id)
@@ -32,15 +65,15 @@ router.get('/recherche', authenticate, hasPermission('voir_incidents'), (req, re
         const db = getDb();
         let query = `
             SELECT i.id, i.titre, i.description, i.severite, i.statut, i.zone, i.created_at,
-                   t.matricule as technicien_matricule, u.nom as technicien_nom, u.prenom as technicien_prenom
+                   u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.role as user_role,
+                   t.matricule as technicien_matricule
             FROM incidents i
+            LEFT JOIN utilisateurs u_target ON i.user_id = u_target.id
             LEFT JOIN techniciens t ON i.technicien_id = t.id
-            LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
             WHERE i.titre LIKE ? OR i.description LIKE ? OR i.zone LIKE ?
         `;
         const params = [`%${q}%`, `%${q}%`, `%${q}%`];
 
-        // Filtrage selon le rôle
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
             if (tech) {
@@ -54,7 +87,6 @@ router.get('/recherche', authenticate, hasPermission('voir_incidents'), (req, re
                 params.push(sup.id);
             }
         }
-        // admin et DJ voient tout → pas de filtre supplémentaire
 
         query += ' ORDER BY i.severite DESC, i.created_at DESC LIMIT ?';
         params.push(parseInt(limit));
@@ -67,17 +99,10 @@ router.get('/recherche', authenticate, hasPermission('voir_incidents'), (req, re
     }
 });
 
-// ========================================================
-// GET /incidents/statistiques - autorisé à superviseur, admin, DJ
-// ✅ Correction : middleware inline autorisant superviseur, admin, DJ
-// ========================================================
+// GET /incidents/statistiques
 router.get('/statistiques', authenticate, hasPermission('voir_statistiques'), (req, res, next) => {
     if (!req.user) {
-        return res.status(401).json({
-            success: false,
-            error: 'Non authentifié',
-            code: 'NOT_AUTHENTICATED'
-        });
+        return res.status(401).json({ success: false, error: 'Non authentifié', code: 'NOT_AUTHENTICATED' });
     }
     if (['superviseur', 'admin', 'dj'].includes(req.user.role)) {
         return next();
@@ -90,7 +115,6 @@ router.get('/statistiques', authenticate, hasPermission('voir_statistiques'), (r
 }, (req, res) => {
     try {
         const db = getDb();
-        // Helpers pour éviter les erreurs SQL
         const safeGet = (query, params = []) => {
             try { const result = db.prepare(query).get(...params); return result ? (result.count || 0) : 0; }
             catch (e) { console.warn('⚠️ Statistique échouée:', e.message); return 0; }
@@ -160,11 +184,13 @@ router.get('/statut/:statut', authenticate, hasPermission('voir_incidents'), (re
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
         const incidents = db.prepare(`
-            SELECT i.*, t.matricule as technicien_matricule, u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom,
+            SELECT i.*,
+                   u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.role as user_role,
+                   t.matricule as technicien_matricule,
                    u_sup.nom as superviseur_nom, u_sup.prenom as superviseur_prenom
             FROM incidents i
+            LEFT JOIN utilisateurs u_target ON i.user_id = u_target.id
             LEFT JOIN techniciens t ON i.technicien_id = t.id
-            LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
             LEFT JOIN superviseurs s ON i.superviseur_id = s.id
             LEFT JOIN utilisateurs u_sup ON s.utilisateur_id = u_sup.id
             WHERE i.statut = ?
@@ -190,10 +216,12 @@ router.get('/severite/:severite', authenticate, hasPermission('voir_incidents'),
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
         const incidents = db.prepare(`
-            SELECT i.*, t.matricule as technicien_matricule, u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom
+            SELECT i.*,
+                   u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.role as user_role,
+                   t.matricule as technicien_matricule
             FROM incidents i
+            LEFT JOIN utilisateurs u_target ON i.user_id = u_target.id
             LEFT JOIN techniciens t ON i.technicien_id = t.id
-            LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
             WHERE i.severite = ?
             ORDER BY i.created_at DESC
             LIMIT ? OFFSET ?
@@ -268,10 +296,12 @@ router.get('/superviseur/:id', authenticate, hasPermission('voir_incidents'), (r
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
         const incidents = db.prepare(`
-            SELECT i.*, t.matricule as technicien_matricule, u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom
+            SELECT i.*,
+                   u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.role as user_role,
+                   t.matricule as technicien_matricule
             FROM incidents i
+            LEFT JOIN utilisateurs u_target ON i.user_id = u_target.id
             LEFT JOIN techniciens t ON i.technicien_id = t.id
-            LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
             ${whereClause}
             ORDER BY i.severite DESC, i.created_at DESC
             LIMIT ? OFFSET ?
@@ -285,18 +315,15 @@ router.get('/superviseur/:id', authenticate, hasPermission('voir_incidents'), (r
     }
 });
 
-// ========================================================
-// GET /incidents - LISTE DES INCIDENTS (tous rôles)
-// ========================================================
+// GET /incidents - LISTE
 router.get('/', authenticate, hasPermission('voir_incidents'), (req, res) => {
     try {
         const db = getDb();
-        const { statut, severite, type_incident, technicien_id, superviseur_id, zone, date_debut, date_fin, page = 1, limit = 50 } = req.query;
+        const { statut, severite, type_incident, technicien_id, user_id, superviseur_id, zone, date_debut, date_fin, page = 1, limit = 50 } = req.query;
 
         let conditions = [];
         let params = [];
 
-        // Filtrage automatique par rôle
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
             if (tech) { conditions.push('i.technicien_id = ?'); params.push(tech.id); }
@@ -304,12 +331,13 @@ router.get('/', authenticate, hasPermission('voir_incidents'), (req, res) => {
             const sup = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
             if (sup) { conditions.push('i.superviseur_id = ?'); params.push(sup.id); }
         }
-        // admin/DJ voient tout → pas de filtre automatique
 
         if (statut) { conditions.push('i.statut = ?'); params.push(statut); }
         if (severite) { conditions.push('i.severite = ?'); params.push(severite); }
         if (type_incident) { conditions.push('i.type_incident = ?'); params.push(type_incident); }
         if (technicien_id && req.userRole !== 'technicien') { conditions.push('i.technicien_id = ?'); params.push(parseInt(technicien_id)); }
+        // 🎯 FILTRE user_id
+        if (user_id && req.userRole !== 'technicien') { conditions.push('i.user_id = ?'); params.push(parseInt(user_id)); }
         if (superviseur_id) { conditions.push('i.superviseur_id = ?'); params.push(parseInt(superviseur_id)); }
         if (zone) { conditions.push('i.zone LIKE ?'); params.push(`%${zone}%`); }
         if (date_debut) { conditions.push('i.date_incident >= ?'); params.push(date_debut); }
@@ -321,12 +349,15 @@ router.get('/', authenticate, hasPermission('voir_incidents'), (req, res) => {
         const incidents = db.prepare(`
             SELECT
                 i.*,
+                u_target.nom as user_nom,
+                u_target.prenom as user_prenom,
+                u_target.email as user_email,
+                u_target.role as user_role,
                 t.id as technicien_id,
                 t.matricule as technicien_matricule,
                 t.specialite as technicien_specialite,
                 u_tech.nom as technicien_nom,
                 u_tech.prenom as technicien_prenom,
-                u_tech.email as technicien_email,
                 s.id as superviseur_id,
                 s.zone_responsable as superviseur_zone,
                 u_sup.nom as superviseur_nom,
@@ -334,6 +365,7 @@ router.get('/', authenticate, hasPermission('voir_incidents'), (req, res) => {
                 r.titre as rapport_titre,
                 r.id as rapport_id
             FROM incidents i
+            LEFT JOIN utilisateurs u_target ON i.user_id = u_target.id
             LEFT JOIN techniciens t ON i.technicien_id = t.id
             LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
             LEFT JOIN superviseurs s ON i.superviseur_id = s.id
@@ -344,8 +376,7 @@ router.get('/', authenticate, hasPermission('voir_incidents'), (req, res) => {
             LIMIT ? OFFSET ?
         `).all(...params, parseInt(limit), offset);
 
-        const countParams = params.length > 2 ? params.slice(0, params.length - 2) : params;
-        const total = db.prepare(`SELECT COUNT(*) as count FROM incidents i ${whereClause}`).get(...countParams);
+        const total = db.prepare(`SELECT COUNT(*) as count FROM incidents i ${whereClause}`).get(...params);
 
         return res.json({
             success: true,
@@ -359,28 +390,26 @@ router.get('/', authenticate, hasPermission('voir_incidents'), (req, res) => {
         });
     } catch (error) {
         console.error('❌ Erreur liste incidents:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Erreur interne du serveur'
-        });
+        return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
     }
 });
 
-// ========================================================
-// GET /incidents/:id - DÉTAILS D'UN INCIDENT (tous rôles)
-// ========================================================
+// GET /incidents/:id - DÉTAILS
 router.get('/:id', authenticate, hasPermission('voir_incidents'), (req, res) => {
     try {
         const db = getDb();
         const incidentId = parseInt(req.params.id);
 
         const incident = db.prepare(`
-            SELECT i.*, t.id as technicien_id, t.matricule as technicien_matricule, t.specialite as technicien_specialite, t.zone_intervention as technicien_zone,
+            SELECT i.*,
+                   u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.email as user_email, u_target.role as user_role,
+                   t.id as technicien_id, t.matricule as technicien_matricule, t.specialite as technicien_specialite, t.zone_intervention as technicien_zone,
                    u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom, u_tech.email as technicien_email, u_tech.telephone as technicien_telephone,
                    s.id as superviseur_id, s.zone_responsable as superviseur_zone,
                    u_sup.nom as superviseur_nom, u_sup.prenom as superviseur_prenom, u_sup.email as superviseur_email,
                    r.titre as rapport_titre, r.id as rapport_id, r.description as rapport_description
             FROM incidents i
+            LEFT JOIN utilisateurs u_target ON i.user_id = u_target.id
             LEFT JOIN techniciens t ON i.technicien_id = t.id
             LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
             LEFT JOIN superviseurs s ON i.superviseur_id = s.id
@@ -391,15 +420,15 @@ router.get('/:id', authenticate, hasPermission('voir_incidents'), (req, res) => 
 
         if (!incident) return res.status(404).json({ success: false, message: 'Incident non trouvé' });
 
-        // Vérification d'accès
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (tech && incident.technicien_id !== tech.id) return res.status(403).json({ success: false, message: 'Accès refusé' });
+            if (tech && incident.technicien_id !== tech.id && incident.user_id !== req.userId) {
+                return res.status(403).json({ success: false, message: 'Accès refusé' });
+            }
         } else if (req.userRole === 'superviseur') {
             const sup = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
             if (sup && incident.superviseur_id !== sup.id) return res.status(403).json({ success: false, message: 'Accès refusé' });
         }
-        // admin/DJ passent
 
         const historique = db.prepare("SELECT action, details, created_at FROM historique_actions WHERE table_concerned = 'incidents' AND enregistrement_id = ? ORDER BY created_at DESC LIMIT 20").all(incidentId);
 
@@ -411,12 +440,14 @@ router.get('/:id', authenticate, hasPermission('voir_incidents'), (req, res) => 
 });
 
 // ========================================================
-// POST /incidents - CRÉER UN INCIDENT (tous rôles)
+// POST /incidents - CRÉER UN INCIDENT
+// 🎯 Accepte user_id OU technicien_id
 // ========================================================
 router.post('/', authenticate, hasPermission('creer_incident'), (req, res) => {
     try {
         const {
             technicien_id,
+            user_id,           // 🎯 NOUVEAU
             rapport_id,
             titre,
             description,
@@ -442,61 +473,107 @@ router.post('/', authenticate, hasPermission('creer_incident'), (req, res) => {
 
         const db = getDb();
 
-        // Déterminer l'ID du technicien
-        let finalTechnicienId = technicien_id;
+        // 🎯 Déterminer l'utilisateur cible
+        let finalUserId = null;
+        let finalTechnicienId = null;
+
+        if (user_id) {
+            const resolved = resolveUserTarget(db, parseInt(user_id));
+            if (!resolved.exists) {
+                return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+            }
+            finalUserId = resolved.user_id;
+            finalTechnicienId = resolved.technicien_id;
+        } else if (technicien_id) {
+            const tech = db.prepare('SELECT id, utilisateur_id FROM techniciens WHERE id = ?').get(parseInt(technicien_id));
+            if (tech) {
+                finalTechnicienId = tech.id;
+                finalUserId = tech.utilisateur_id;
+            } else {
+                // Rétrocompatibilité : technicien_id peut être un user_id
+                const user = db.prepare('SELECT id, role FROM utilisateurs WHERE id = ?').get(parseInt(technicien_id));
+                if (user) {
+                    finalUserId = user.id;
+                    if (user.role === 'technicien') {
+                        const t = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(user.id);
+                        if (t) finalTechnicienId = t.id;
+                    }
+                }
+            }
+        }
+
+        // Si c'est un technicien connecté, forcer son ID
         if (req.userRole === 'technicien') {
-            const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (!tech) return res.status(404).json({ success: false, message: 'Profil technicien non trouvé' });
-            finalTechnicienId = tech.id;
+            const tech = db.prepare('SELECT id, utilisateur_id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
+            if (tech) {
+                finalTechnicienId = tech.id;
+                finalUserId = tech.utilisateur_id;
+            } else {
+                finalUserId = req.userId;
+            }
         }
 
-        // Vérifier que le technicien existe si fourni
-        if (finalTechnicienId) {
-            const techExists = db.prepare('SELECT id FROM techniciens WHERE id = ?').get(finalTechnicienId);
-            if (!techExists) return res.status(404).json({ success: false, message: 'Technicien assigné non trouvé' });
-        }
-
-        // Récupérer le superviseur si l'utilisateur est superviseur
+        // Récupérer le superviseur connecté
         let superviseurId = null;
         if (req.userRole === 'superviseur') {
             const sup = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
             if (sup) superviseurId = sup.id;
         }
 
-        const result = db.prepare(`
-            INSERT INTO incidents (
-                technicien_id,
-                rapport_id,
-                superviseur_id,
-                titre,
-                description,
-                type_incident,
-                severite,
-                statut,
-                zone,
-                latitude,
-                longitude,
-                client_appele,
-                solution_apportee
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ouvert', ?, ?, ?, ?, ?)
-        `).run(
-            finalTechnicienId || null,
-            rapport_id || null,
-            superviseurId,
-            titre.trim(),
-            description.trim(),
-            type_incident || 'autre',
-            severite || 'moyenne',
-            zone || null,
-            latitude ? parseFloat(latitude) : null,
-            longitude ? parseFloat(longitude) : null,
-            client_appele ? parseInt(client_appele) : 0,
-            solution_apportee || null
-        );
+        // Insertion (avec user_id si disponible)
+        const permCols = db.prepare("PRAGMA table_info(incidents)").all().map(c => c.name);
+        const hasUserId = permCols.includes('user_id');
+
+        let result;
+        if (hasUserId) {
+            result = db.prepare(`
+                INSERT INTO incidents (
+                    user_id, technicien_id, rapport_id, superviseur_id,
+                    titre, description, type_incident, severite, statut,
+                    zone, latitude, longitude, client_appele, solution_apportee
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ouvert', ?, ?, ?, ?, ?)
+            `).run(
+                finalUserId,
+                finalTechnicienId,
+                rapport_id || null,
+                superviseurId,
+                titre.trim(),
+                description.trim(),
+                type_incident || 'autre',
+                severite || 'moyenne',
+                zone || null,
+                latitude ? parseFloat(latitude) : null,
+                longitude ? parseFloat(longitude) : null,
+                client_appele ? parseInt(client_appele) : 0,
+                solution_apportee || null
+            );
+        } else {
+            // Fallback sans user_id
+            result = db.prepare(`
+                INSERT INTO incidents (
+                    technicien_id, rapport_id, superviseur_id,
+                    titre, description, type_incident, severite, statut,
+                    zone, latitude, longitude, client_appele, solution_apportee
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ouvert', ?, ?, ?, ?, ?)
+            `).run(
+                finalTechnicienId,
+                rapport_id || null,
+                superviseurId,
+                titre.trim(),
+                description.trim(),
+                type_incident || 'autre',
+                severite || 'moyenne',
+                zone || null,
+                latitude ? parseFloat(latitude) : null,
+                longitude ? parseFloat(longitude) : null,
+                client_appele ? parseInt(client_appele) : 0,
+                solution_apportee || null
+            );
+        }
 
         const incidentId = result.lastInsertRowid;
 
-        // Notifications (superviseurs et admins selon sévérité)
+        // Notifications
         const messages = {
             'critique': '🚨 Incident CRITIQUE signalé',
             'elevee': '⚠️ Incident HAUTE priorité signalé',
@@ -515,7 +592,7 @@ router.post('/', authenticate, hasPermission('creer_incident'), (req, res) => {
             admins.forEach(a => insertNotif.run(a.id, `🚨 Incident ${severite.toUpperCase()}`, `Incident "${titre}" nécessite votre attention`, JSON.stringify({ incidentId, titre, severite })));
         }
 
-        logUserAction(req, 'CREATION_INCIDENT', { table: 'incidents', recordId: incidentId, titre, severite });
+        logUserAction(req, 'CREATION_INCIDENT', { table: 'incidents', recordId: incidentId, titre, severite, user_id: finalUserId });
         return res.status(201).json({ success: true, message: 'Incident créé', id: incidentId });
     } catch (error) {
         console.error('❌ Erreur création incident:', error);
@@ -525,13 +602,62 @@ router.post('/', authenticate, hasPermission('creer_incident'), (req, res) => {
 
 // ========================================================
 // PUT /incidents/:id - MODIFIER UN INCIDENT
-// ✅ Accès : superviseur, admin, DJ (via isSuperviseurOrAdmin) + permission modifier_incident
 // ========================================================
-router.put('/:id', authenticate, hasPermission('modifier_incident'), isSuperviseurOrAdmin, (req, res) => {
+router.put('/:id', authenticate, async (req, res, next) => {
+    try {
+        const incidentId = parseInt(req.params.id);
+        const db = getDb();
+
+        const incident = db.prepare('SELECT * FROM incidents WHERE id = ?').get(incidentId);
+        if (!incident) {
+            return res.status(404).json({ success: false, message: 'Incident non trouvé' });
+        }
+
+        const userRole = req.user.role;
+        const isTechnicienRole = userRole === 'technicien';
+        const isSuperviseurRole = userRole === 'superviseur';
+        const isAdminRole = userRole === 'admin' || userRole === 'dj';
+
+        if (isTechnicienRole) {
+            const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
+            if (tech && incident.technicien_id !== tech.id && incident.user_id !== req.userId) {
+                return res.status(403).json({ success: false, message: 'Accès refusé' });
+            }
+            return next();
+        }
+
+        if (isAdminRole) {
+            return next();
+        }
+
+        if (isSuperviseurRole) {
+            const hasPerm = db.prepare(`
+                SELECT id FROM permissions
+                WHERE superviseur_id = (SELECT id FROM superviseurs WHERE utilisateur_id = ?)
+                AND type_permission = 'modifier_incident'
+                AND est_valide = 1
+            `).get(req.userId);
+            if (!hasPerm) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Permission manquante pour modifier un incident',
+                    code: 'PERMISSION_MISSING'
+                });
+            }
+            return next();
+        }
+
+        return res.status(403).json({ success: false, message: 'Accès refusé' });
+    } catch (error) {
+        console.error('❌ Erreur vérification modification incident:', error);
+        return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
+    }
+}, (req, res) => {
     try {
         const incidentId = parseInt(req.params.id);
         const { titre, description, type_incident, severite, zone, latitude, longitude, client_appele, solution_apportee } = req.body;
         const db = getDb();
+
         const incident = db.prepare('SELECT * FROM incidents WHERE id = ?').get(incidentId);
         if (!incident) return res.status(404).json({ success: false, message: 'Incident non trouvé' });
         if (incident.statut === 'ferme') return res.status(400).json({ success: false, message: 'Impossible de modifier un incident fermé' });
@@ -556,8 +682,7 @@ router.put('/:id', authenticate, hasPermission('modifier_incident'), isSupervise
 });
 
 // ========================================================
-// DELETE /incidents/:id - SUPPRIMER UN INCIDENT
-// ✅ Accès : superviseur, admin, DJ + permission supprimer_incident
+// DELETE /incidents/:id
 // ========================================================
 router.delete('/:id', authenticate, hasPermission('supprimer_incident'), isSuperviseurOrAdmin, (req, res) => {
     try {
@@ -575,8 +700,7 @@ router.delete('/:id', authenticate, hasPermission('supprimer_incident'), isSuper
 });
 
 // ========================================================
-// PATCH /incidents/:id/statut - CHANGER LE STATUT
-// ✅ Accès : superviseur, admin, DJ + permission modifier_incident
+// PATCH /incidents/:id/statut
 // ========================================================
 router.patch('/:id/statut', authenticate, hasPermission('modifier_incident'), isSuperviseurOrAdmin, (req, res) => {
     try {
@@ -593,9 +717,14 @@ router.patch('/:id/statut', authenticate, hasPermission('modifier_incident'), is
         db.prepare('UPDATE incidents SET statut = ?, date_resolution = COALESCE(?, date_resolution), updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .run(statut, dateResolution, incidentId);
 
-        if (incident.technicien_id) {
-            const techUser = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(incident.technicien_id);
-            if (techUser) {
+        // 🎯 Notifier l'utilisateur concerné (user_id en priorité)
+        try {
+            let targetUserId = incident.user_id;
+            if (!targetUserId && incident.technicien_id) {
+                const techUser = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(incident.technicien_id);
+                if (techUser) targetUserId = techUser.utilisateur_id;
+            }
+            if (targetUserId) {
                 const messages = {
                     'en_cours': "🔄 L'incident est en cours de traitement",
                     'resolu': "✅ L'incident a été résolu",
@@ -603,9 +732,10 @@ router.patch('/:id/statut', authenticate, hasPermission('modifier_incident'), is
                     'ouvert': "📢 L'incident a été réouvert"
                 };
                 db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'incident', ?, ?, ?)`)
-                    .run(techUser.utilisateur_id, `Mise à jour incident`, `${messages[statut] || 'Statut modifié'}: ${incident.titre}`, JSON.stringify({ incidentId, statut, titre: incident.titre }));
+                    .run(targetUserId, `Mise à jour incident`, `${messages[statut] || 'Statut modifié'}: ${incident.titre}`, JSON.stringify({ incidentId, statut, titre: incident.titre }));
             }
-        }
+        } catch (e) { console.warn('⚠️ Notification échouée:', e.message); }
+
         logUserAction(req, 'CHANGEMENT_STATUT_INCIDENT', { table: 'incidents', recordId: incidentId, ancien_statut: incident.statut, nouveau_statut: statut, titre: incident.titre });
         return res.json({ success: true, message: `Statut mis à jour : ${statut}` });
     } catch (error) {
@@ -615,8 +745,7 @@ router.patch('/:id/statut', authenticate, hasPermission('modifier_incident'), is
 });
 
 // ========================================================
-// PATCH /incidents/:id/resoudre - RÉSOUDRE UN INCIDENT
-// ✅ Accès : superviseur, admin, DJ + permission resoudre_incident
+// PATCH /incidents/:id/resoudre
 // ========================================================
 router.patch('/:id/resoudre', authenticate, hasPermission('resoudre_incident'), isSuperviseurOrAdmin, (req, res) => {
     try {
@@ -630,13 +759,19 @@ router.patch('/:id/resoudre', authenticate, hasPermission('resoudre_incident'), 
         db.prepare(`UPDATE incidents SET statut = 'resolu', date_resolution = CURRENT_TIMESTAMP, solution_apportee = COALESCE(?, solution_apportee), updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
             .run(solution_apportee || null, incidentId);
 
-        if (incident.technicien_id) {
-            const techUser = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(incident.technicien_id);
-            if (techUser) {
-                db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'incident', '✅ Incident résolu', ?, ?)`)
-                    .run(techUser.utilisateur_id, `L'incident "${incident.titre}" a été résolu`, JSON.stringify({ incidentId, titre: incident.titre }));
+        // Notifier
+        try {
+            let targetUserId = incident.user_id;
+            if (!targetUserId && incident.technicien_id) {
+                const techUser = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(incident.technicien_id);
+                if (techUser) targetUserId = techUser.utilisateur_id;
             }
-        }
+            if (targetUserId) {
+                db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'incident', '✅ Incident résolu', ?, ?)`)
+                    .run(targetUserId, `L'incident "${incident.titre}" a été résolu`, JSON.stringify({ incidentId, titre: incident.titre }));
+            }
+        } catch (e) { console.warn('⚠️ Notification échouée:', e.message); }
+
         logUserAction(req, 'RESOLUTION_INCIDENT', { table: 'incidents', recordId: incidentId, titre: incident.titre });
         return res.json({ success: true, message: 'Incident résolu' });
     } catch (error) {
@@ -646,31 +781,62 @@ router.patch('/:id/resoudre', authenticate, hasPermission('resoudre_incident'), 
 });
 
 // ========================================================
-// PATCH /incidents/:id/assigner - ASSIGNER UN TECHNICIEN
-// ✅ Accès : superviseur, admin, DJ + permission modifier_incident
+// PATCH /incidents/:id/assigner
 // ========================================================
 router.patch('/:id/assigner', authenticate, hasPermission('modifier_incident'), isSuperviseurOrAdmin, (req, res) => {
     try {
         const incidentId = parseInt(req.params.id);
-        const { technicien_id } = req.body;
-        if (!technicien_id) return res.status(400).json({ success: false, message: 'ID du technicien requis' });
+        const { technicien_id, user_id } = req.body;
+        if (!technicien_id && !user_id) return res.status(400).json({ success: false, message: 'ID du technicien ou utilisateur requis' });
         const db = getDb();
         const incident = db.prepare('SELECT * FROM incidents WHERE id = ?').get(incidentId);
         if (!incident) return res.status(404).json({ success: false, message: 'Incident non trouvé' });
 
-        const tech = db.prepare('SELECT id FROM techniciens WHERE id = ?').get(technicien_id);
-        if (!tech) return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+        let finalTechId = technicien_id;
+        let finalUserId = user_id;
 
-        db.prepare('UPDATE incidents SET technicien_id = ?, superviseur_id = COALESCE(?, superviseur_id), updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-            .run(technicien_id, req.userRole === 'superviseur' ? db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId)?.id : null, incidentId);
-
-        const techUser = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(technicien_id);
-        if (techUser) {
-            db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'incident', '📋 Incident assigné', ?, ?)`)
-                .run(techUser.utilisateur_id, `Vous avez été assigné à l'incident: ${incident.titre}`, JSON.stringify({ incidentId, titre: incident.titre }));
+        if (user_id && !technicien_id) {
+            const resolved = resolveUserTarget(db, parseInt(user_id));
+            finalTechId = resolved.technicien_id;
+            finalUserId = resolved.user_id;
+        } else if (technicien_id) {
+            const tech = db.prepare('SELECT id, utilisateur_id FROM techniciens WHERE id = ?').get(technicien_id);
+            if (tech) {
+                finalUserId = tech.utilisateur_id;
+            }
         }
-        logUserAction(req, 'ASSIGNATION_INCIDENT', { table: 'incidents', recordId: incidentId, technicien_id, titre: incident.titre });
-        return res.json({ success: true, message: 'Technicien assigné' });
+
+        if (finalTechId) {
+            const tech = db.prepare('SELECT id FROM techniciens WHERE id = ?').get(finalTechId);
+            if (!tech) return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+        }
+
+        const supId = req.userRole === 'superviseur'
+            ? db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId)?.id
+            : null;
+
+        // Update dynamique selon colonnes disponibles
+        const cols = db.prepare("PRAGMA table_info(incidents)").all().map(c => c.name);
+        const hasUserId = cols.includes('user_id');
+
+        if (hasUserId) {
+            db.prepare('UPDATE incidents SET technicien_id = ?, user_id = COALESCE(?, user_id), superviseur_id = COALESCE(?, superviseur_id), updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+                .run(finalTechId || null, finalUserId || null, supId, incidentId);
+        } else {
+            db.prepare('UPDATE incidents SET technicien_id = ?, superviseur_id = COALESCE(?, superviseur_id), updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+                .run(finalTechId || null, supId, incidentId);
+        }
+
+        // Notifier
+        try {
+            if (finalUserId) {
+                db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'incident', '📋 Incident assigné', ?, ?)`)
+                    .run(finalUserId, `Vous avez été assigné à l'incident: ${incident.titre}`, JSON.stringify({ incidentId, titre: incident.titre }));
+            }
+        } catch (e) { console.warn('⚠️ Notification échouée:', e.message); }
+
+        logUserAction(req, 'ASSIGNATION_INCIDENT', { table: 'incidents', recordId: incidentId, technicien_id: finalTechId, user_id: finalUserId, titre: incident.titre });
+        return res.json({ success: true, message: 'Utilisateur assigné' });
     } catch (error) {
         console.error('❌ Erreur assignation:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });

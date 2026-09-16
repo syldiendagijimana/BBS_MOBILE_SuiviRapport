@@ -1,4 +1,5 @@
 // mobile/src/screens/RapportDetailScreen.js
+// Version avec affichage du rôle de l'utilisateur concerné
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -35,6 +36,95 @@ import { Colors, Spacing, Typography, Radius, Shadows } from '../theme';
 const { width, height } = Dimensions.get('window');
 
 // =========================================================
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    shortLabel: 'Admin',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    shortLabel: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    shortLabel: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    shortLabel: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) return {
+    label: 'Utilisateur',
+    shortLabel: 'Utilisateur',
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    shortLabel: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+};
+
+/**
+ * Détecte le rôle de l'utilisateur concerné par le rapport
+ */
+const getRapportRole = (rapport) => {
+  if (!rapport) return null;
+  if (rapport.user_role) return rapport.user_role.toLowerCase();
+  if (rapport.user_id && rapport.user_nom) return 'utilisateur';
+  if (rapport.technicien_id && rapport.technicien_nom) return 'technicien';
+  return null;
+};
+
+/**
+ * Extrait les infos utilisateur
+ */
+const getRapportUser = (rapport) => {
+  if (!rapport) return { prenom: '', nom: '', role: null, email: null, extra: null };
+
+  // Priorité 1 : user_id (nouveau)
+  if (rapport.user_id && rapport.user_nom) {
+    return {
+      role: rapport.user_role || 'utilisateur',
+      prenom: rapport.user_prenom || '',
+      nom: rapport.user_nom || '',
+      email: rapport.user_email || null,
+      extra: null,
+    };
+  }
+
+  // Priorité 2 : technicien
+  if (rapport.technicien_nom) {
+    return {
+      role: 'technicien',
+      prenom: rapport.technicien_prenom || '',
+      nom: rapport.technicien_nom || '',
+      email: rapport.technicien_email || null,
+      extra: rapport.technicien_matricule || null,
+    };
+  }
+
+  return { prenom: '', nom: '', role: null, email: null, extra: null };
+};
+
+// =========================================================
 // COMPOSANT PRINCIPAL
 // =========================================================
 
@@ -65,16 +155,8 @@ export default function RapportDetailScreen() {
   useEffect(() => {
     if (!loading && rapport) {
       Animated.parallel([
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 500,
-          useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 500,
-          useNativeDriver: true,
-        }),
+        Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
       ]).start();
     }
   }, [loading, rapport]);
@@ -141,6 +223,10 @@ export default function RapportDetailScreen() {
 
   const handleShare = async () => {
     try {
+      const userInfo = getRapportUser(rapport);
+      const fullName = `${userInfo.prenom} ${userInfo.nom}`.trim();
+      const roleLabel = getRoleConfig(userInfo.role).label;
+
       await Share.share({
         title: `Rapport: ${rapport.titre}`,
         message: `
@@ -150,6 +236,8 @@ Titre: ${rapport.titre}
 Statut: ${rapport.statut}
 Type: ${rapport.type_intervention || 'Non spécifié'}
 Date: ${new Date(rapport.created_at).toLocaleDateString('fr-FR')}
+
+${fullName ? `Concerne: ${fullName} (${roleLabel})` : ''}
 
 Description:
 ${rapport.description}
@@ -195,6 +283,11 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
   }
 
   const photos = rapport.photos || [];
+  const userInfo = getRapportUser(rapport);
+  const fullName = `${userInfo.prenom} ${userInfo.nom}`.trim();
+  const roleConfig = getRoleConfig(userInfo.role);
+  const hasUser = !!fullName;
+  const initials = fullName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?';
 
   return (
     <View style={styles.container}>
@@ -208,35 +301,21 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
         style={styles.header}
       >
         <View style={styles.headerContent}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={styles.backBtn}
-            activeOpacity={0.7}
-          >
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
             <Ionicons name="chevron-back" size={24} color={Colors.textWhite} />
           </TouchableOpacity>
 
           <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {rapport.titre}
-            </Text>
+            <Text style={styles.headerTitle} numberOfLines={1}>{rapport.titre}</Text>
           </View>
 
           <View style={styles.headerRight}>
-            <TouchableOpacity
-              onPress={handleShare}
-              style={styles.shareBtn}
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity onPress={handleShare} style={styles.shareBtn} activeOpacity={0.7}>
               <Ionicons name="share-outline" size={22} color={Colors.textWhite} />
             </TouchableOpacity>
 
             {canManage && isEditable && (
-              <TouchableOpacity
-                onPress={() => setShowActions(!showActions)}
-                style={styles.moreBtn}
-                activeOpacity={0.7}
-              >
+              <TouchableOpacity onPress={() => setShowActions(!showActions)} style={styles.moreBtn} activeOpacity={0.7}>
                 <Ionicons name="ellipsis-vertical" size={22} color={Colors.textWhite} />
               </TouchableOpacity>
             )}
@@ -244,7 +323,6 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
         </View>
       </GradientHeader>
 
-      {/* CONTENU */}
       <Animated.ScrollView
         style={[styles.scroll, { opacity: fadeAnim }]}
         contentContainerStyle={styles.scrollContent}
@@ -262,6 +340,34 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
             />
           )}
         </View>
+
+        {/* 🎯 CARTE UTILISATEUR CONCERNÉ */}
+        {hasUser && (
+          <Card style={[styles.userCard, { borderLeftColor: roleConfig.color, borderLeftWidth: 5 }]}>
+            <View style={styles.userCardContent}>
+              <View style={[styles.userCardAvatar, { backgroundColor: roleConfig.color + '20' }]}>
+                <Text style={[styles.userCardAvatarText, { color: roleConfig.color }]}>
+                  {initials}
+                </Text>
+              </View>
+              <View style={styles.userCardInfo}>
+                <Text style={styles.userCardName}>{fullName}</Text>
+                <View style={[styles.userCardRoleBadge, { backgroundColor: roleConfig.color + '20' }]}>
+                  <Ionicons name={roleConfig.icon} size={12} color={roleConfig.color} />
+                  <Text style={[styles.userCardRoleText, { color: roleConfig.color }]}>
+                    {roleConfig.label}
+                  </Text>
+                </View>
+                {userInfo.email && (
+                  <Text style={styles.userCardEmail} numberOfLines={1}>{userInfo.email}</Text>
+                )}
+                {userInfo.extra && (
+                  <Text style={styles.userCardExtra}>Matricule: {userInfo.extra}</Text>
+                )}
+              </View>
+            </View>
+          </Card>
+        )}
 
         {/* CARTE PRINCIPALE */}
         <Card style={styles.mainCard}>
@@ -298,18 +404,26 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
 
           <View style={styles.infoGrid}>
             <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>Technicien</Text>
-              <Text style={styles.infoValue}>
-                {rapport.technicien_prenom || ''} {rapport.technicien_nom || ''}
-              </Text>
+              <Text style={styles.infoLabel}>Utilisateur</Text>
+              <Text style={styles.infoValue}>{fullName || '—'}</Text>
             </View>
 
             <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>Matricule</Text>
-              <Text style={styles.infoValue}>
-                {rapport.technicien_matricule || '—'}
-              </Text>
+              <Text style={styles.infoLabel}>Rôle</Text>
+              <View style={[styles.roleTag, { backgroundColor: roleConfig.color + '20' }]}>
+                <Ionicons name={roleConfig.icon} size={11} color={roleConfig.color} />
+                <Text style={[styles.roleTagText, { color: roleConfig.color }]}>
+                  {roleConfig.shortLabel}
+                </Text>
+              </View>
             </View>
+
+            {rapport.technicien_matricule && (
+              <View style={styles.infoItem}>
+                <Text style={styles.infoLabel}>Matricule</Text>
+                <Text style={styles.infoValue}>{rapport.technicien_matricule}</Text>
+              </View>
+            )}
 
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>Date d'intervention</Text>
@@ -323,18 +437,14 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
             {rapport.duree_intervention && (
               <View style={styles.infoItem}>
                 <Text style={styles.infoLabel}>Durée</Text>
-                <Text style={styles.infoValue}>
-                  {rapport.duree_intervention} minutes
-                </Text>
+                <Text style={styles.infoValue}>{rapport.duree_intervention} minutes</Text>
               </View>
             )}
 
             {rapport.mission_titre && (
               <View style={styles.infoItem}>
                 <Text style={styles.infoLabel}>Mission</Text>
-                <Text style={styles.infoValue}>
-                  {rapport.mission_titre}
-                </Text>
+                <Text style={styles.infoValue}>{rapport.mission_titre}</Text>
               </View>
             )}
           </View>
@@ -371,11 +481,7 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
               <Text style={styles.sectionLabel}>Photos ({photos.length})</Text>
             </View>
 
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.photosScroll}
-            >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photosScroll}>
               {photos.map((photo, index) => {
                 const uri = photo?.url || photo?.uri || photo?.path;
                 if (!uri) return null;
@@ -389,11 +495,7 @@ ${rapport.adresse ? `Adresse: ${rapport.adresse}` : ''}
                     }}
                     activeOpacity={0.8}
                   >
-                    <Image
-                      source={{ uri }}
-                      style={styles.photoThumb}
-                      resizeMode="cover"
-                    />
+                    <Image source={{ uri }} style={styles.photoThumb} resizeMode="cover" />
                     {index === 0 && photos.length > 1 && (
                       <View style={styles.photoCountBadge}>
                         <Text style={styles.photoCountText}>+{photos.length - 1}</Text>
@@ -555,311 +657,201 @@ const getTypeColor = (type) => {
 // =========================================================
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
 
   // HEADER
   header: {
-    paddingTop: 50,
-    paddingBottom: 16,
-    paddingHorizontal: Spacing.lg,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    ...Shadows.card,
-    elevation: 8,
+    paddingTop: 50, paddingBottom: 16, paddingHorizontal: Spacing.lg,
+    borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
+    ...Shadows.card, elevation: 8,
   },
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 40, height: 40, borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
   },
-  headerCenter: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: Spacing.sm,
-  },
-  headerTitle: {
-    color: Colors.textWhite,
-    fontSize: 17,
-    fontWeight: '700',
-    maxWidth: '80%',
-  },
-  headerRight: {
-    flexDirection: 'row',
-    gap: 8,
-  },
+  headerCenter: { flex: 1, alignItems: 'center', paddingHorizontal: Spacing.sm },
+  headerTitle: { color: Colors.textWhite, fontSize: 17, fontWeight: '700', maxWidth: '80%' },
+  headerRight: { flexDirection: 'row', gap: 8 },
   shareBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 40, height: 40, borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
   },
   moreBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 40, height: 40, borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
   },
 
   // SCROLL
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: 20,
-  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: 20 },
 
   // STATUS ROW
-  statusRow: {
-    flexDirection: 'row',
-    gap: 8,
+  statusRow: { flexDirection: 'row', gap: 8, marginBottom: Spacing.md },
+  typeBadge: { paddingVertical: 4, paddingHorizontal: 12 },
+
+  // 🎯 CARTE UTILISATEUR
+  userCard: {
+    padding: Spacing.md,
     marginBottom: Spacing.md,
+    backgroundColor: Colors.surface,
   },
-  typeBadge: {
-    paddingVertical: 4,
-    paddingHorizontal: 12,
+  userCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  userCardAvatar: {
+    width: 56, height: 56, borderRadius: 28,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  userCardAvatarText: {
+    fontSize: 20, fontWeight: '800', letterSpacing: 0.5,
+  },
+  userCardInfo: { flex: 1 },
+  userCardName: {
+    fontSize: 16, fontWeight: '700',
+    color: Colors.textPrimary, marginBottom: 4,
+  },
+  userCardRoleBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: 5,
+  },
+  userCardRoleText: {
+    fontSize: 11, fontWeight: '800',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  userCardEmail: {
+    fontSize: 11, color: Colors.textMuted,
+    marginTop: 4,
+  },
+  userCardExtra: {
+    fontSize: 11, color: Colors.textMuted,
+    marginTop: 2,
   },
 
   // CARDS
-  mainCard: {
-    padding: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  infoCard: {
-    padding: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  locationCard: {
-    padding: Spacing.md,
-    marginBottom: Spacing.md,
-  },
-  photosCard: {
-    padding: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-  metaCard: {
-    padding: Spacing.md,
-    marginBottom: Spacing.md,
-    alignItems: 'center',
-  },
+  mainCard: { padding: Spacing.lg, marginBottom: Spacing.md },
+  infoCard: { padding: Spacing.lg, marginBottom: Spacing.md },
+  locationCard: { padding: Spacing.md, marginBottom: Spacing.md },
+  photosCard: { padding: Spacing.lg, marginBottom: Spacing.md },
+  metaCard: { padding: Spacing.md, marginBottom: Spacing.md, alignItems: 'center' },
 
   rapportTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 12,
+    fontSize: 18, fontWeight: '700',
+    color: Colors.textPrimary, marginBottom: 12,
   },
 
   sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6,
   },
   sectionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.textSecondary,
+    fontSize: 13, fontWeight: '600', color: Colors.textSecondary,
   },
 
   descriptionText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    lineHeight: 22,
+    fontSize: 14, color: Colors.textSecondary, lineHeight: 22,
   },
   solutionText: {
-    fontSize: 14,
-    color: Colors.success,
-    lineHeight: 22,
+    fontSize: 14, color: Colors.success, lineHeight: 22,
   },
 
   divider: {
-    height: 1,
-    backgroundColor: Colors.divider,
-    marginVertical: 12,
+    height: 1, backgroundColor: Colors.divider, marginVertical: 12,
   },
 
   // INFO GRID
-  infoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  infoItem: {
-    width: '48%',
-  },
+  infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  infoItem: { width: '48%' },
   infoLabel: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    fontWeight: '500',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontSize: 11, color: Colors.textMuted, fontWeight: '500',
+    textTransform: 'uppercase', letterSpacing: 0.5,
   },
   infoValue: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-    marginTop: 2,
-    fontWeight: '500',
+    fontSize: 14, color: Colors.textPrimary, marginTop: 2, fontWeight: '500',
+  },
+
+  // 🎯 ROLE TAG
+  roleTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderRadius: 4,
+  },
+  roleTagText: {
+    fontSize: 10, fontWeight: '800',
+    textTransform: 'uppercase', letterSpacing: 0.3,
   },
 
   // LOCATION
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  locationContent: {
-    flex: 1,
-  },
-  locationLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  locationText: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  locationCoords: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginTop: 2,
-  },
+  locationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  locationContent: { flex: 1 },
+  locationLabel: { fontSize: 12, fontWeight: '600', color: Colors.textPrimary },
+  locationText: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
+  locationCoords: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
 
   // PHOTOS
-  photosScroll: {
-    flexDirection: 'row',
-  },
+  photosScroll: { flexDirection: 'row' },
   photoThumb: {
-    width: 100,
-    height: 100,
-    borderRadius: Radius.md,
-    marginRight: 8,
+    width: 100, height: 100, borderRadius: Radius.md, marginRight: 8,
     backgroundColor: Colors.border,
   },
   photoCountBadge: {
-    position: 'absolute',
-    bottom: 8,
-    right: 12,
+    position: 'absolute', bottom: 8, right: 12,
     backgroundColor: 'rgba(0,0,0,0.7)',
-    borderRadius: 12,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2,
   },
-  photoCountText: {
-    color: Colors.textWhite,
-    fontSize: 11,
-    fontWeight: '600',
-  },
+  photoCountText: { color: Colors.textWhite, fontSize: 11, fontWeight: '600' },
 
   // META
-  metaText: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    textAlign: 'center',
-  },
+  metaText: { fontSize: 11, color: Colors.textMuted, textAlign: 'center' },
 
   // ACTIONS
-  actionsRow: {
-    flexDirection: 'row',
-    marginTop: Spacing.md,
-  },
-  actionBtn: {
-    flex: 1,
-  },
+  actionsRow: { flexDirection: 'row', marginTop: Spacing.md },
+  actionBtn: { flex: 1 },
 
   // STATUS ACTIONS
   statusActions: {
-    marginTop: Spacing.md,
-    paddingTop: Spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: Colors.divider,
+    marginTop: Spacing.md, paddingTop: Spacing.md,
+    borderTopWidth: 1, borderTopColor: Colors.divider,
   },
   statusActionsLabel: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginBottom: 8,
-    fontWeight: '500',
+    fontSize: 12, color: Colors.textMuted, marginBottom: 8, fontWeight: '500',
   },
-  statusActionsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
+  statusActionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   statusActionBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: Radius.full,
-    borderWidth: 1,
-    borderColor: 'transparent',
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderRadius: Radius.full, borderWidth: 1, borderColor: 'transparent',
   },
-  statusActionText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
+  statusActionText: { fontSize: 12, fontWeight: '500' },
 
   // ACTIONS MENU
   actionsMenu: {
-    position: 'absolute',
-    top: 100,
-    right: 16,
+    position: 'absolute', top: 100, right: 16,
     backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: 8,
-    ...Shadows.card,
-    elevation: 8,
-    zIndex: 999,
-    minWidth: 180,
+    borderRadius: Radius.lg, padding: 8,
+    ...Shadows.card, elevation: 8, zIndex: 999, minWidth: 180,
   },
   actionMenuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: Radius.sm,
-    gap: 10,
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: Radius.sm, gap: 10,
   },
-  actionMenuText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.textPrimary,
-  },
-  actionMenuDivider: {
-    height: 1,
-    backgroundColor: Colors.divider,
-    marginVertical: 4,
-  },
-  actionMenuDelete: {
-    backgroundColor: Colors.danger + '10',
-  },
+  actionMenuText: { fontSize: 14, fontWeight: '500', color: Colors.textPrimary },
+  actionMenuDivider: { height: 1, backgroundColor: Colors.divider, marginVertical: 4 },
+  actionMenuDelete: { backgroundColor: Colors.danger + '10' },
 
   // FOOTER
-  footerSpace: {
-    height: 20,
-  },
+  footerSpace: { height: 20 },
 
   // ERROR
   errorText: {
-    fontSize: 16,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    marginTop: 40,
+    fontSize: 16, color: Colors.textMuted, textAlign: 'center', marginTop: 40,
   },
 });

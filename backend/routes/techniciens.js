@@ -5,10 +5,11 @@ const { getDb } = require('../db/database');
 const {
     authenticate,
     isAdmin,
+    isAdminOrDJ,
     isSuperviseur,
     isTechnicien,
-    isSuperviseurOrAdmin,
-    hasPermission,   // <-- AJOUT
+    isSuperviseurOrAdmin,   // ✅ déjà importé
+    hasPermission,
     logUserAction
 } = require('../middleware/auth');
 
@@ -539,10 +540,10 @@ router.get('/:id/incidents', authenticate, hasPermission('voir_techniciens'), is
 });
 
 // ========================================================
-// POST /techniciens - CRÉER UN TECHNICIEN
+// ✅ POST /techniciens - CRÉER UN TECHNICIEN (Admin, DJ, Superviseur)
 // ========================================================
 
-router.post('/', authenticate, hasPermission('creer_technicien'), isSuperviseurOrAdmin, (req, res) => {
+router.post('/', authenticate, isSuperviseurOrAdmin, hasPermission('creer_technicien'), (req, res) => {
     try {
         const {
             nom,
@@ -641,10 +642,10 @@ router.post('/', authenticate, hasPermission('creer_technicien'), isSuperviseurO
 });
 
 // ========================================================
-// PUT /techniciens/:id - MODIFIER UN TECHNICIEN
+// ✅ PUT /techniciens/:id - MODIFIER UN TECHNICIEN (Admin, DJ, Superviseur)
 // ========================================================
 
-router.put('/:id', authenticate, hasPermission('modifier_technicien'), isSuperviseurOrAdmin, (req, res) => {
+router.put('/:id', authenticate, isSuperviseurOrAdmin, hasPermission('modifier_technicien'), (req, res) => {
     try {
         const technicienId = parseInt(req.params.id);
         const {
@@ -763,7 +764,7 @@ router.put('/:id', authenticate, hasPermission('modifier_technicien'), isSupervi
 });
 
 // ========================================================
-// DELETE /techniciens/:id - SUPPRIMER UN TECHNICIEN
+// DELETE /techniciens/:id - SUPPRIMER UN TECHNICIEN (Admin seulement)
 // ========================================================
 
 router.delete('/:id', authenticate, hasPermission('supprimer_technicien'), isAdmin, (req, res) => {
@@ -812,10 +813,10 @@ router.delete('/:id', authenticate, hasPermission('supprimer_technicien'), isAdm
 });
 
 // ========================================================
-// PATCH /techniciens/:id/disponible - CHANGER DISPONIBILITÉ
+// ✅ PATCH /techniciens/:id/disponible - CHANGER DISPONIBILITÉ (Admin, DJ, Superviseur)
 // ========================================================
 
-router.patch('/:id/disponible', authenticate, hasPermission('modifier_technicien'), isSuperviseurOrAdmin, (req, res) => {
+router.patch('/:id/disponible', authenticate, isSuperviseurOrAdmin, hasPermission('modifier_technicien'), (req, res) => {
     try {
         const technicienId = parseInt(req.params.id);
         const { disponible } = req.body;
@@ -865,7 +866,7 @@ router.patch('/:id/disponible', authenticate, hasPermission('modifier_technicien
 });
 
 // ========================================================
-// PATCH /techniciens/:id/position - METTRE À JOUR POSITION GPS
+// PATCH /techniciens/:id/position - METTRE À JOUR POSITION GPS (Technicien lui-même)
 // ========================================================
 
 router.patch('/:id/position', authenticate, hasPermission('modifier_technicien'), isTechnicien, (req, res) => {
@@ -915,7 +916,7 @@ router.patch('/:id/position', authenticate, hasPermission('modifier_technicien')
 });
 
 // ========================================================
-// 🆕 GET /techniciens/:id/permissions - RÉCUPÉRER LES PERMISSIONS D'UN TECHNICIEN
+// GET /techniciens/:id/permissions - RÉCUPÉRER LES PERMISSIONS D'UN TECHNICIEN
 // ========================================================
 
 router.get('/:id/permissions', authenticate, (req, res) => {
@@ -923,7 +924,6 @@ router.get('/:id/permissions', authenticate, (req, res) => {
         const technicienId = parseInt(req.params.id);
         const db = getDb();
 
-        // Vérifier que le technicien existe
         const technicien = db.prepare('SELECT id FROM techniciens WHERE id = ?').get(technicienId);
         if (!technicien) {
             return res.status(404).json({
@@ -932,7 +932,6 @@ router.get('/:id/permissions', authenticate, (req, res) => {
             });
         }
 
-        // Récupérer les permissions valides (est_valide = 1)
         const permissions = db.prepare(`
             SELECT type_permission FROM permissions
             WHERE technicien_id = ? AND est_valide = 1

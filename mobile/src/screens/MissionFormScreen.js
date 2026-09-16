@@ -1,5 +1,5 @@
 // mobile/src/screens/MissionFormScreen.js
-// Version stable définitive avec DateTimePicker + permissions
+// Version avec sélection d'un UTILISATEUR unique (admin, DJ, superviseur, technicien)
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -16,13 +16,14 @@ import {
   Modal,
   TextInput,
   FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import GradientHeader from '../components/GradientHeader';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
-import { missionsAPI, techniciensAPI, superviseursAPI } from '../services/api';
+import { missionsAPI, fetchAllUsers } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card } from '../components';
 import { Colors, Spacing, Typography, Radius, Shadows } from '../theme';
@@ -54,6 +55,53 @@ const STATUTS = [
 ];
 
 // =========================================================
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    shortLabel: 'Admin',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    shortLabel: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    shortLabel: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    shortLabel: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) return {
+    label: 'Utilisateur',
+    shortLabel: 'Utilisateur',
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    shortLabel: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+};
+
+// =========================================================
 // COMPOSANT SÉLECTEUR RECHERCHABLE
 // =========================================================
 
@@ -68,6 +116,7 @@ function SearchableSelector({
   onBlur,
   icon,
   getOptionColor,
+  disabled,
 }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [search, setSearch] = useState('');
@@ -101,9 +150,11 @@ function SearchableSelector({
         style={[
           styles.selectorInput,
           error && touched && styles.selectorInputError,
+          disabled && styles.selectorDisabled,
         ]}
-        onPress={() => setModalVisible(true)}
+        onPress={() => !disabled && setModalVisible(true)}
         activeOpacity={0.7}
+        disabled={disabled}
       >
         <View style={styles.selectorInputContent}>
           <Ionicons name={getIconName()} size={20} color={value ? getColor() : Colors.textMuted} />
@@ -169,12 +220,17 @@ function SearchableSelector({
                         color={item.color || Colors.textSecondary}
                       />
                     )}
-                    <Text style={[
-                      styles.modalListItemText,
-                      value === item.value && { color: item.color || Colors.primary, fontWeight: '600' },
-                    ]}>
-                      {item.label}
-                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[
+                        styles.modalListItemText,
+                        value === item.value && { color: item.color || Colors.primary, fontWeight: '600' },
+                      ]}>
+                        {item.label}
+                      </Text>
+                      {item.subtitle && (
+                        <Text style={styles.modalListItemSubtitle}>{item.subtitle}</Text>
+                      )}
+                    </View>
                   </View>
                   {value === item.value && (
                     <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />
@@ -184,17 +240,6 @@ function SearchableSelector({
               ListEmptyComponent={() => (
                 <View style={styles.modalEmpty}>
                   <Text style={styles.modalEmptyText}>Aucun résultat</Text>
-                  <TouchableOpacity
-                    style={styles.modalCustomAdd}
-                    onPress={() => {
-                      if (search.trim()) {
-                        handleSelect(search.trim());
-                      }
-                    }}
-                  >
-                    <Ionicons name="add-circle-outline" size={20} color={Colors.primary} />
-                    <Text style={styles.modalCustomAddText}>Ajouter "{search}"</Text>
-                  </TouchableOpacity>
                 </View>
               )}
             />
@@ -230,7 +275,6 @@ export default function MissionFormScreen() {
   const [typeMission, setTypeMission] = useState(editMission?.type_mission || '');
   const [priorite, setPriorite] = useState(editMission?.priorite || 'moyenne');
   const [statut, setStatut] = useState(editMission?.statut || 'planifiee');
-  const [technicienId, setTechnicienId] = useState(editMission?.technicien_id || null);
   const [adresse, setAdresse] = useState(editMission?.adresse || '');
   const [latitude, setLatitude] = useState(editMission?.latitude ? String(editMission.latitude) : '');
   const [longitude, setLongitude] = useState(editMission?.longitude ? String(editMission.longitude) : '');
@@ -247,11 +291,14 @@ export default function MissionFormScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [dateMode, setDateMode] = useState('debut');
 
-  const [techniciens, setTechniciens] = useState([]);
-  const [superviseurs, setSuperviseurs] = useState([]);
-  const [superviseurId, setSuperviseurId] = useState(editMission?.superviseur_id || null);
+  // 🎯 SÉLECTION DE L'UTILISATEUR (au lieu de superviseur + technicien)
+  const [selectedUserId, setSelectedUserId] = useState(
+    editMission?.user_id || editMission?.technicien_id || editMission?.superviseur_id || null
+  );
+  const [allUsers, setAllUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
-  // Références pour le montage et les timeouts
+  // Références
   const isMounted = useRef(true);
   const timerRef = useRef(null);
 
@@ -259,34 +306,26 @@ export default function MissionFormScreen() {
   const slideAnim = useRef(new Animated.Value(30)).current;
 
   // =========================================================
-  // CHARGEMENT (CORRIGÉ – permissions)
+  // CHARGEMENT DES UTILISATEURS
   // =========================================================
 
   useEffect(() => {
     const load = async () => {
+      setLoadingUsers(true);
       try {
-        // Chargement des techniciens : seulement si l'utilisateur a les droits (admin, superviseur, DJ)
-        let techs = [];
-        if (isAdmin || isSuperviseur || isDJ) {
-          const techRes = await techniciensAPI.list().catch(() => ({ data: [] }));
-          techs = techRes?.data || techRes || [];
-        }
-        setTechniciens(techs);
-
-        // Chargement des superviseurs : seulement si admin ou DJ (le superviseur n'a pas besoin de se voir lui-même, et technicien n'y a pas accès)
-        let sups = [];
-        if (isAdmin || isDJ) {
-          const supRes = await superviseursAPI.list().catch(() => ({ data: [] }));
-          sups = supRes?.data || supRes || [];
-        }
-        setSuperviseurs(sups);
+        // 🎯 Charger TOUS les utilisateurs
+        const usersList = await fetchAllUsers().catch(() => []);
+        setAllUsers(usersList || []);
+        console.log('✅ Utilisateurs chargés:', usersList?.length);
       } catch (error) {
-        console.error('❌ Erreur chargement données:', error);
-        // Pas d'alerte pour éviter d'ennuyer l'utilisateur
+        console.error('❌ Erreur chargement utilisateurs:', error);
+        setAllUsers([]);
+      } finally {
+        setLoadingUsers(false);
       }
     };
     load();
-  }, [isAdmin, isSuperviseur, isDJ]);
+  }, []);
 
   useEffect(() => {
     Animated.parallel([
@@ -294,12 +333,9 @@ export default function MissionFormScreen() {
       Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
     ]).start();
 
-    // Nettoyage
     return () => {
       isMounted.current = false;
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
+      if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, []);
 
@@ -331,8 +367,8 @@ export default function MissionFormScreen() {
     }
     if (!dateDebut) newErrors.dateDebut = 'La date de début est requise';
     setErrors(newErrors);
-    setFormValid(Object.keys(newErrors).length === 0 && (!isSuperviseur ? !!superviseurId : true));
-  }, [titre, typeMission, priorite, adresse, statut, dateDebut, isEdit, isSuperviseur, superviseurId, validateField]);
+    setFormValid(Object.keys(newErrors).length === 0 && !!selectedUserId);
+  }, [titre, typeMission, priorite, adresse, statut, dateDebut, isEdit, selectedUserId, validateField]);
 
   const handleFieldBlur = useCallback((field) => setTouched(prev => ({ ...prev, [field]: true })), []);
 
@@ -354,8 +390,8 @@ export default function MissionFormScreen() {
       return;
     }
 
-    if (!isSuperviseur && !superviseurId) {
-      Alert.alert('Erreur', 'Veuillez sélectionner un superviseur');
+    if (!selectedUserId) {
+      Alert.alert('Erreur', 'Veuillez sélectionner un utilisateur');
       return;
     }
 
@@ -372,10 +408,13 @@ export default function MissionFormScreen() {
         notes: notes.trim() || null,
       };
       if (isEdit) data.statut = statut;
-      if (technicienId) data.technicien_id = technicienId;
       if (latitude) data.latitude = parseFloat(latitude);
       if (longitude) data.longitude = parseFloat(longitude);
-      if (!isSuperviseur) data.superviseur_id = superviseurId;
+
+      // 🎯 Envoyer user_id
+      data.user_id = Number(selectedUserId);
+
+      console.log('📦 Envoi de la mission - userId:', selectedUserId);
 
       if (isEdit) {
         await missionsAPI.update(editMission.id, data);
@@ -405,19 +444,19 @@ export default function MissionFormScreen() {
 
   const isFormDirty = () => {
     if (isEdit) {
+      const originalUserId = editMission?.user_id || editMission?.technicien_id || editMission?.superviseur_id || null;
       return titre !== (editMission?.titre || '') ||
         description !== (editMission?.description || '') ||
         typeMission !== (editMission?.type_mission || '') ||
         priorite !== (editMission?.priorite || 'moyenne') ||
         statut !== (editMission?.statut || 'planifiee') ||
-        technicienId !== (editMission?.technicien_id || null) ||
+        selectedUserId !== originalUserId ||
         adresse !== (editMission?.adresse || '') ||
         notes !== (editMission?.notes || '') ||
         dateDebut.getTime() !== new Date(editMission.date_debut).getTime() ||
-        dateFinPrevue.getTime() !== new Date(editMission.date_fin_prevue || Date.now() + 7 * 24 * 60 * 60 * 1000).getTime() ||
-        (!isSuperviseur && superviseurId !== (editMission?.superviseur_id || null));
+        dateFinPrevue.getTime() !== new Date(editMission.date_fin_prevue || Date.now() + 7 * 24 * 60 * 60 * 1000).getTime();
     }
-    return titre !== '' || description !== '' || typeMission !== '' || adresse !== '' || notes !== '' || technicienId !== null || (!isSuperviseur && superviseurId !== null);
+    return titre !== '' || description !== '' || typeMission !== '' || adresse !== '' || notes !== '' || selectedUserId !== null;
   };
 
   const openDatePicker = (mode) => {
@@ -425,60 +464,45 @@ export default function MissionFormScreen() {
     setShowDatePicker(true);
   };
 
-  // =========================================================
-  // Gestion ultra‑robuste de DateTimePicker
-  // =========================================================
   const handleDateChange = useCallback((event, selectedDate) => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-
+    if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      if (isMounted.current) {
-        setShowDatePicker(false);
-      }
+      if (isMounted.current) setShowDatePicker(false);
     }, 0);
 
     if (!event) {
       if (selectedDate && isMounted.current) {
-        if (dateMode === 'debut') {
-          setDateDebut(selectedDate);
-        } else {
-          setDateFinPrevue(selectedDate);
-        }
+        if (dateMode === 'debut') setDateDebut(selectedDate);
+        else setDateFinPrevue(selectedDate);
       }
       return;
     }
 
-    if (event.type === 'dismissed') {
-      return;
-    }
+    if (event.type === 'dismissed') return;
 
     if (selectedDate && isMounted.current) {
-      if (dateMode === 'debut') {
-        setDateDebut(selectedDate);
-      } else {
-        setDateFinPrevue(selectedDate);
-      }
+      if (dateMode === 'debut') setDateDebut(selectedDate);
+      else setDateFinPrevue(selectedDate);
     }
   }, [dateMode]);
 
-  // Construction des options (filtrage disponibles)
-  const technicienOptions = techniciens
-    .filter(t => t.disponible === 1)
-    .map(t => ({
-      label: `${t.prenom} ${t.nom} (${t.matricule})`,
-      value: t.id,
-      icon: 'person-outline',
-      color: Colors.primary,
-    }));
+  // 🎯 Options utilisateurs avec badge de rôle
+  const userOptions = allUsers.map(u => {
+    const roleConf = getRoleConfig(u.role);
+    return {
+      label: `${u.prenom} ${u.nom}`,
+      subtitle: `${roleConf.label}${u.email ? ' • ' + u.email : ''}`,
+      value: u.id,
+      icon: roleConf.icon,
+      color: roleConf.color,
+      role: (u.role || '').toLowerCase(),
+    };
+  });
 
-  const superviseurOptions = superviseurs.map(s => ({
-    label: `${s.prenom} ${s.nom}`,
-    value: s.id,
-    icon: 'person-outline',
-    color: Colors.primary,
-  }));
+  const getUserColor = (value) => {
+    const found = userOptions.find(o => o.value === value);
+    return found?.color || Colors.textMuted;
+  };
 
   const getPrioriteColor = (prio) => {
     const found = PRIORITES.find(p => p.value === prio);
@@ -549,30 +573,25 @@ export default function MissionFormScreen() {
             />
           )}
 
-          {!isSuperviseur && (isAdmin || isDJ) && (
-            <SearchableSelector
-              label="Superviseur"
-              value={superviseurId}
-              onChange={setSuperviseurId}
-              options={superviseurOptions}
-              placeholder="Sélectionner un superviseur"
-              error={errors.superviseurId}
-              touched={touched.superviseurId}
-              onBlur={() => handleFieldBlur('superviseurId')}
-            />
-          )}
+          {/* 🎯 SÉLECTION DE L'UTILISATEUR (au lieu de superviseur + technicien) */}
+          <SearchableSelector
+            label="Utilisateur concerné"
+            value={selectedUserId}
+            onChange={setSelectedUserId}
+            options={userOptions}
+            placeholder={loadingUsers ? 'Chargement...' : 'Sélectionner un utilisateur'}
+            error={errors.selectedUserId}
+            touched={touched.selectedUserId}
+            onBlur={() => handleFieldBlur('selectedUserId')}
+            getOptionColor={getUserColor}
+            disabled={loadingUsers}
+          />
 
-          {(isAdmin || isSuperviseur || isDJ) && (
-            <SearchableSelector
-              label="Technicien assigné"
-              value={technicienId}
-              onChange={setTechnicienId}
-              options={technicienOptions}
-              placeholder="Sélectionner un technicien"
-              error={errors.technicienId}
-              touched={touched.technicienId}
-              onBlur={() => handleFieldBlur('technicienId')}
-            />
+          {loadingUsers && (
+            <View style={styles.loadingUsersRow}>
+              <ActivityIndicator size="small" color={Colors.primary} />
+              <Text style={styles.loadingUsersText}>Chargement des utilisateurs...</Text>
+            </View>
           )}
 
           <View style={styles.dateRow}>
@@ -622,263 +641,107 @@ export default function MissionFormScreen() {
 }
 
 // =========================================================
-// STYLES (inchangés)
+// STYLES
 // =========================================================
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-
+  container: { flex: 1, backgroundColor: Colors.background },
   header: {
-    paddingTop: 50,
-    paddingBottom: 16,
-    paddingHorizontal: Spacing.lg,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    ...Shadows.card,
-    elevation: 8,
+    paddingTop: 50, paddingBottom: 16, paddingHorizontal: Spacing.lg,
+    borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
+    ...Shadows.card, elevation: 8,
   },
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 40, height: 40, borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
   },
-  headerCenter: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: Spacing.sm,
-  },
-  headerTitle: {
-    color: Colors.textWhite,
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  headerSubtitle: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 12,
-    marginTop: 2,
-  },
+  headerCenter: { flex: 1, alignItems: 'center', paddingHorizontal: Spacing.sm },
+  headerTitle: { color: Colors.textWhite, fontSize: 17, fontWeight: '700' },
+  headerSubtitle: { color: 'rgba(255,255,255,0.7)', fontSize: 12, marginTop: 2 },
   saveBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 40, height: 40, borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'center', alignItems: 'center',
   },
-  saveBtnDisabled: {
-    opacity: 0.5,
+  saveBtnDisabled: { opacity: 0.5 },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: 20 },
+  formCard: { padding: Spacing.lg, marginBottom: Spacing.md },
+  errorText: { fontSize: 12, color: Colors.danger, marginTop: 4, marginBottom: 4, marginLeft: 4 },
+  loadingUsersRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginTop: -8, marginBottom: Spacing.md, paddingLeft: 4,
   },
-
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: 20,
-  },
-
-  formCard: {
-    padding: Spacing.lg,
-    marginBottom: Spacing.md,
-  },
-
-  errorText: {
-    fontSize: 12,
-    color: Colors.danger,
-    marginTop: 4,
-    marginBottom: 4,
-    marginLeft: 4,
-  },
-
-  selectorContainer: {
-    marginBottom: Spacing.md,
-  },
+  loadingUsersText: { fontSize: 12, color: Colors.textMuted },
+  selectorContainer: { marginBottom: Spacing.md },
   selectorLabel: {
     ...Typography.label,
-    marginBottom: 6,
-    color: Colors.textPrimary,
-    fontWeight: '500',
+    marginBottom: 6, color: Colors.textPrimary, fontWeight: '500',
   },
   selectorInput: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    backgroundColor: Colors.surface,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md,
+    paddingHorizontal: 12, paddingVertical: 12, backgroundColor: Colors.surface,
   },
-  selectorInputError: {
-    borderColor: Colors.danger,
-  },
-  selectorInputContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  selectorInputText: {
-    fontSize: 14,
-    marginLeft: 8,
-  },
-  selectorInputTextSelected: {
-    color: Colors.textPrimary,
-  },
-  selectorInputTextPlaceholder: {
-    color: Colors.textMuted,
-  },
-
-  dateRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: Spacing.md,
-  },
-  dateItem: {
-    flex: 1,
-  },
+  selectorInputError: { borderColor: Colors.danger },
+  selectorDisabled: { opacity: 0.6 },
+  selectorInputContent: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  selectorInputText: { fontSize: 14, marginLeft: 8 },
+  selectorInputTextSelected: { color: Colors.textPrimary },
+  selectorInputTextPlaceholder: { color: Colors.textMuted },
+  dateRow: { flexDirection: 'row', gap: 12, marginBottom: Spacing.md },
+  dateItem: { flex: 1 },
   dateLabel: {
     ...Typography.label,
-    marginBottom: 6,
-    color: Colors.textPrimary,
-    fontWeight: '500',
+    marginBottom: 6, color: Colors.textPrimary, fontWeight: '500',
   },
   datePicker: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-    padding: 12,
-    backgroundColor: Colors.surface,
-    gap: 8,
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1.5, borderColor: Colors.border, borderRadius: Radius.md,
+    padding: 12, backgroundColor: Colors.surface, gap: 8,
   },
-  datePickerText: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-  },
-
-  gpsRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  gpsInput: {
-    flex: 1,
-  },
-
-  buttonsContainer: {
-    marginTop: Spacing.sm,
-  },
-  submitBtn: {
-    marginBottom: Spacing.sm,
-  },
-  footerSpace: {
-    height: 20,
-  },
-
+  datePickerText: { fontSize: 14, color: Colors.textPrimary },
+  gpsRow: { flexDirection: 'row', gap: 12 },
+  gpsInput: { flex: 1 },
+  buttonsContainer: { marginTop: Spacing.sm },
+  submitBtn: { marginBottom: Spacing.sm },
+  footerSpace: { height: 20 },
   modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center',
   },
   modalContainer: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    width: '90%',
-    maxHeight: '80%',
-    padding: Spacing.md,
-    ...Shadows.card,
-    elevation: 8,
+    backgroundColor: Colors.surface, borderRadius: Radius.lg,
+    width: '90%', maxHeight: '80%', padding: Spacing.md,
+    ...Shadows.card, elevation: 8,
   },
   modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.divider,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingBottom: Spacing.md, borderBottomWidth: 1, borderBottomColor: Colors.divider,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
   searchInputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.background,
-    borderRadius: Radius.md,
-    paddingHorizontal: 10,
-    marginVertical: Spacing.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: Colors.background, borderRadius: Radius.md,
+    paddingHorizontal: 10, marginVertical: Spacing.md,
+    borderWidth: 1, borderColor: Colors.border,
   },
   searchInput: {
-    flex: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    fontSize: 14,
-    color: Colors.textPrimary,
+    flex: 1, paddingVertical: 8, paddingHorizontal: 8,
+    fontSize: 14, color: Colors.textPrimary,
   },
-  modalList: {
-    paddingBottom: 20,
-  },
+  modalList: { paddingBottom: 20 },
   modalListItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.divider,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 12, paddingHorizontal: 8,
+    borderBottomWidth: 1, borderBottomColor: Colors.divider,
   },
-  modalListItemSelected: {
-    backgroundColor: Colors.primary + '10',
-    borderRadius: Radius.sm,
-  },
-  modalListItemContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  modalListItemText: {
-    fontSize: 15,
-    color: Colors.textPrimary,
-  },
-  modalEmpty: {
-    padding: 20,
-    alignItems: 'center',
-  },
-  modalEmptyText: {
-    fontSize: 14,
-    color: Colors.textMuted,
-  },
-  modalCustomAdd: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    backgroundColor: Colors.primary + '15',
-    borderRadius: Radius.md,
-  },
-  modalCustomAddText: {
-    fontSize: 14,
-    color: Colors.primary,
-    fontWeight: '500',
-    marginLeft: 6,
-  },
+  modalListItemSelected: { backgroundColor: Colors.primary + '10', borderRadius: Radius.sm },
+  modalListItemContent: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  modalListItemText: { fontSize: 15, color: Colors.textPrimary },
+  modalListItemSubtitle: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+  modalEmpty: { padding: 20, alignItems: 'center' },
+  modalEmptyText: { fontSize: 14, color: Colors.textMuted },
 });

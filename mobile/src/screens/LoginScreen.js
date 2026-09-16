@@ -31,6 +31,7 @@ export default function LoginScreen({ navigation }) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [errorType, setErrorType] = useState('');
   const [errors, setErrors] = useState({});
   const [rememberMe, setRememberMe] = useState(false);
 
@@ -86,12 +87,80 @@ export default function LoginScreen({ navigation }) {
   };
 
   // =========================================================
+  // ANALYSE DE L'ERREUR (NOUVEAU)
+  // =========================================================
+
+  const analyzeError = (errorMessage, statusCode) => {
+    if (!errorMessage) return { type: 'unknown', message: 'Erreur inconnue' };
+
+    const msg = errorMessage.toLowerCase();
+
+    // Email incorrect
+    if (
+      msg.includes('email') && (
+        msg.includes('incorrect') ||
+        msg.includes('invalide') ||
+        msg.includes('non trouvé') ||
+        msg.includes('introuvable') ||
+        msg.includes('inconnu')
+      )
+    ) {
+      return {
+        type: 'email',
+        message: "L'adresse email est incorrecte. Vérifiez votre email."
+      };
+    }
+
+    // Mot de passe incorrect
+    if (msg.includes('mot de passe') || msg.includes('password')) {
+      // Si mentionne aussi email → les deux
+      if (msg.includes('email') || msg.includes('identifiant')) {
+        return {
+          type: 'both',
+          message: "Email et mot de passe incorrects. Vérifiez vos informations."
+        };
+      }
+      return {
+        type: 'password',
+        message: "Le mot de passe est incorrect. Vérifiez votre mot de passe."
+      };
+    }
+
+    // Identifiants génériques
+    if (msg.includes('identifiant') || msg.includes('credentials') || msg.includes('incorrect')) {
+      return {
+        type: 'both',
+        message: "Email ou mot de passe incorrect. Vérifiez vos informations."
+      };
+    }
+
+    // Compte désactivé
+    if (msg.includes('désactivé') || msg.includes('inactif') || msg.includes('désactivée')) {
+      return {
+        type: 'account',
+        message: "Votre compte a été désactivé. Contactez l'administrateur."
+      };
+    }
+
+    //  Erreur serveur
+    if (statusCode >= 500) {
+      return {
+        type: 'server',
+        message: "Le serveur rencontre un problème. Réessayez plus tard."
+      };
+    }
+
+    return { type: 'unknown', message: errorMessage };
+  };
+
+  // =========================================================
   // HANDLERS
   // =========================================================
 
   const handleLogin = async () => {
 
     setError('');
+    setErrorType('');
     setErrors({});
 
     // Valider le formulaire
@@ -105,11 +174,33 @@ export default function LoginScreen({ navigation }) {
       const result = await login(email.trim().toLowerCase(), password);
 
       if (!result.success) {
-        setError(result.error || 'Erreur de connexion');
+        // Analyser l'erreur pour afficher le bon message
+        const analyzed = analyzeError(result.error, result.status);
+        setError(analyzed.message);
+        setErrorType(analyzed.type);
       }
     } catch (err) {
       console.error('Login error:', err);
-      setError(err.message || 'Erreur de connexion au serveur');
+
+      // Détection erreur réseau (pas d'internet)
+      const isNetworkError =
+        err.message?.includes('Network') ||
+        err.message?.includes('network') ||
+        err.message?.includes('timeout') ||
+        err.message?.includes('Timeout') ||
+        err.message?.includes('Unable to resolve') ||
+        err.code === 'ECONNABORTED' ||
+        err.code === 'ERR_NETWORK' ||
+        !err.response;
+
+      if (isNetworkError) {
+        setError("Erreur de connexion internet. Vérifiez votre connexion et réessayez.");
+        setErrorType('network');
+      } else {
+        const analyzed = analyzeError(err.message, err.response?.status);
+        setError(analyzed.message);
+        setErrorType(analyzed.type);
+      }
     } finally {
       setLoading(false);
     }
@@ -117,7 +208,30 @@ export default function LoginScreen({ navigation }) {
 
   const clearError = () => {
     setError('');
+    setErrorType('');
     setErrors({});
+  };
+
+  // Icône selon le type d'erreur
+  const getErrorIcon = () => {
+    switch (errorType) {
+      case 'network': return 'cloud-offline-outline';
+      case 'email': return 'mail-unread-outline';
+      case 'password': return 'lock-closed-outline';
+      case 'both': return 'close-circle-outline';
+      case 'account': return 'person-remove-outline';
+      case 'server': return 'server-outline';
+      default: return 'alert-circle-outline';
+    }
+  };
+
+  // Couleur selon le type d'erreur
+  const getErrorColor = () => {
+    switch (errorType) {
+      case 'network': return Colors.warning;
+      case 'server': return Colors.textMuted;
+      default: return Colors.danger;
+    }
   };
 
   // =========================================================
@@ -177,11 +291,20 @@ export default function LoginScreen({ navigation }) {
 
           {/* Erreur globale */}
           {error ? (
-            <View style={styles.errorBanner}>
-              <Ionicons name="alert-circle" size={20} color={Colors.danger} />
-              <Text style={styles.errorBannerText}>{error}</Text>
+            <View style={[
+              styles.errorBanner,
+              { backgroundColor: getErrorColor() + '12', borderColor: getErrorColor() + '30' }
+            ]}>
+              <Ionicons
+                name={getErrorIcon()}
+                size={20}
+                color={getErrorColor()}
+              />
+              <Text style={[styles.errorBannerText, { color: getErrorColor() }]}>
+                {error}
+              </Text>
               <TouchableOpacity onPress={clearError} style={styles.errorClose}>
-                <Ionicons name="close" size={18} color={Colors.danger} />
+                <Ionicons name="close" size={18} color={getErrorColor()} />
               </TouchableOpacity>
             </View>
           ) : null}
@@ -195,7 +318,7 @@ export default function LoginScreen({ navigation }) {
               if (errors.email) {
                 setErrors({ ...errors, email: '' });
               }
-              if (error) setError('');
+              if (error) clearError();
             }}
             placeholder="Adresse Email"
             keyboardType="email-address"
@@ -214,7 +337,7 @@ export default function LoginScreen({ navigation }) {
               if (errors.password) {
                 setErrors({ ...errors, password: '' });
               }
-              if (error) setError('');
+              if (error) clearError();
             }}
             placeholder="Mot de passe"
             secureTextEntry={!showPassword}

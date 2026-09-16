@@ -1,5 +1,5 @@
 // mobile/src/screens/RapportFormScreen.js
-// Version avec SearchableSelector, chargement conditionnel des techniciens ET géocodage automatique
+// Version avec sélection d'un UTILISATEUR (admin, DJ, superviseur, technicien)
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -13,7 +13,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import GradientHeader from '../components/GradientHeader';
 import Geolocation from 'react-native-geolocation-service';
 
-import { rapportsAPI, missionsAPI, techniciensAPI } from '../services/api';
+import { rapportsAPI, missionsAPI, fetchAllUsers } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { Button, Input, Card } from '../components';
 import { Colors, Spacing, Radius, Typography, Shadows } from '../theme';
@@ -36,7 +36,54 @@ const TYPES_INTERVENTION = [
 ];
 
 // =========================================================
-// COMPOSANT SÉLECTEUR RECHERCHABLE (inchangé)
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    shortLabel: 'Admin',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    shortLabel: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    shortLabel: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    shortLabel: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) return {
+    label: 'Utilisateur',
+    shortLabel: 'Utilisateur',
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    shortLabel: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+};
+
+// =========================================================
+// COMPOSANT SÉLECTEUR RECHERCHABLE
 // =========================================================
 
 function SearchableSelector({
@@ -154,12 +201,17 @@ function SearchableSelector({
                         color={item.color || Colors.textSecondary}
                       />
                     )}
-                    <Text style={[
-                      styles.modalListItemText,
-                      value === item.value && { color: item.color || Colors.primary, fontWeight: '600' },
-                    ]}>
-                      {item.label}
-                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[
+                        styles.modalListItemText,
+                        value === item.value && { color: item.color || Colors.primary, fontWeight: '600' },
+                      ]}>
+                        {item.label}
+                      </Text>
+                      {item.subtitle && (
+                        <Text style={styles.modalListItemSubtitle}>{item.subtitle}</Text>
+                      )}
+                    </View>
                   </View>
                   {value === item.value && (
                     <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />
@@ -169,17 +221,6 @@ function SearchableSelector({
               ListEmptyComponent={() => (
                 <View style={styles.modalEmpty}>
                   <Text style={styles.modalEmptyText}>Aucun résultat</Text>
-                  <TouchableOpacity
-                    style={styles.modalCustomAdd}
-                    onPress={() => {
-                      if (search.trim()) {
-                        handleSelect(search.trim());
-                      }
-                    }}
-                  >
-                    <Ionicons name="add-circle-outline" size={20} color={Colors.primary} />
-                    <Text style={styles.modalCustomAddText}>Ajouter "{search}"</Text>
-                  </TouchableOpacity>
                 </View>
               )}
             />
@@ -191,7 +232,7 @@ function SearchableSelector({
 }
 
 // =========================================================
-// PERMISSIONS (inchangées)
+// PERMISSIONS
 // =========================================================
 
 const requestCameraPermission = async () => {
@@ -251,7 +292,7 @@ const requestLocationPermission = async () => {
 };
 
 // =========================================================
-// COMPOSANT PRINCIPAL (avec géocodage automatique)
+// COMPOSANT PRINCIPAL
 // =========================================================
 
 export default function RapportFormScreen() {
@@ -290,9 +331,13 @@ export default function RapportFormScreen() {
   const [formValid, setFormValid] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
 
-  const [technicienId, setTechnicienId] = useState(editRapport?.technicien_id || null);
-  const [techniciens, setTechniciens] = useState([]);
+  // 🎯 SÉLECTION DE L'UTILISATEUR (au lieu de technicien)
+  const [selectedUserId, setSelectedUserId] = useState(
+    editRapport?.technicien_id || null
+  );
+  const [allUsers, setAllUsers] = useState([]);
   const [missions, setMissions] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
   const geocodeTimeout = useRef(null);
 
@@ -301,31 +346,32 @@ export default function RapportFormScreen() {
   const scaleAnim = useRef(new Animated.Value(0.95)).current;
 
   // =========================================================
-  // CHARGEMENT DES LISTES
+  // CHARGEMENT DES LISTES (utilisateurs + missions)
   // =========================================================
 
   useEffect(() => {
     const load = async () => {
+      setLoadingUsers(true);
       try {
-        const techPromise = !isTechnicien
-          ? techniciensAPI.list().catch(() => ({ data: [] }))
-          : Promise.resolve({ data: [] });
-
+        // 🎯 Charger TOUS les utilisateurs (admin, DJ, superviseur, technicien)
+        const usersPromise = fetchAllUsers().catch(() => []);
         const missionPromise = missionsAPI.list().catch(() => ({ data: [] }));
 
-        const [techRes, missionRes] = await Promise.all([techPromise, missionPromise]);
+        const [usersList, missionRes] = await Promise.all([usersPromise, missionPromise]);
 
-        const techList = techRes?.data || techRes || [];
+        setAllUsers(usersList || []);
+        console.log('✅ Utilisateurs chargés:', usersList?.length);
+
         const missionList = missionRes?.data || missionRes || [];
-
-        setTechniciens(techList);
         setMissions(missionList);
       } catch (e) {
         console.log('⚠️ Erreur chargement listes:', e);
+      } finally {
+        setLoadingUsers(false);
       }
     };
     load();
-  }, [isTechnicien]);
+  }, []);
 
   // =========================================================
   // GÉOCODAGE AUTOMATIQUE
@@ -394,16 +440,6 @@ export default function RapportFormScreen() {
     ]).start();
   }, []);
 
-  const validateField = useCallback((field, value) => {
-    switch (field) {
-      case 'titre': return !value?.trim() ? 'Le titre est requis' : '';
-      case 'description': return !value?.trim() ? 'La description est requise' : '';
-      case 'solution': return !value?.trim() ? 'La solution est requise' : '';
-      case 'typeIntervention': return !value ? "Le type d'intervention est requis" : '';
-      default: return '';
-    }
-  }, []);
-
   useEffect(() => {
     const newErrors = {};
     if (!titre.trim()) newErrors.titre = 'Le titre est requis';
@@ -411,8 +447,8 @@ export default function RapportFormScreen() {
     if (!solution.trim()) newErrors.solution = 'La solution est requise';
     if (!typeIntervention) newErrors.typeIntervention = "Le type d'intervention est requis";
     setErrors(newErrors);
-    setFormValid(Object.keys(newErrors).length === 0 && (isTechnicien || !!technicienId));
-  }, [titre, description, solution, typeIntervention, isTechnicien, technicienId]);
+    setFormValid(Object.keys(newErrors).length === 0 && (isTechnicien || !!selectedUserId));
+  }, [titre, description, solution, typeIntervention, isTechnicien, selectedUserId]);
 
   const handleFieldBlur = (field) => {
     setTouched(prev => ({ ...prev, [field]: true }));
@@ -513,7 +549,7 @@ export default function RapportFormScreen() {
   };
 
   // =========================================================
-  // SAUVEGARDE (CORRIGÉE : vérification de la mission)
+  // SAUVEGARDE
   // =========================================================
 
   const handleSave = async () => {
@@ -522,8 +558,8 @@ export default function RapportFormScreen() {
       Alert.alert('Erreur', 'Veuillez remplir tous les champs obligatoires.');
       return;
     }
-    if (!isTechnicien && !technicienId) {
-      Alert.alert('Erreur', 'Veuillez sélectionner un technicien.');
+    if (!isTechnicien && !selectedUserId) {
+      Alert.alert('Erreur', 'Veuillez sélectionner un utilisateur.');
       return;
     }
     if (isEdit && !canEdit) {
@@ -531,7 +567,7 @@ export default function RapportFormScreen() {
       return;
     }
 
-    // ✅ Vérification de la mission sélectionnée
+    // Vérification de la mission
     if (missionId) {
       const missionExists = missions.some(m => m.id === missionId);
       if (!missionExists) {
@@ -557,12 +593,14 @@ export default function RapportFormScreen() {
       if (longitude) formData.append('longitude', parseFloat(longitude));
       if (dateIntervention) formData.append('date_intervention', dateIntervention);
 
-      // ✅ On n'ajoute la mission que si elle existe (déjà vérifié)
       if (missionId && missions.some(m => m.id === missionId)) {
         formData.append('mission_id', missionId);
       }
 
-      if (!isTechnicien && technicienId) formData.append('technicien_id', technicienId);
+      // 🎯 Envoyer l'utilisateur sélectionné (le backend résoudra le rôle)
+      if (!isTechnicien && selectedUserId) {
+        formData.append('user_id', selectedUserId);
+      }
 
       photos.forEach((photo, index) => {
         formData.append('photos', {
@@ -572,8 +610,7 @@ export default function RapportFormScreen() {
         });
       });
 
-      // Log pour déboguer (affiche le missionId envoyé)
-      console.log('📦 Envoi du rapport - missionId:', missionId);
+      console.log('📦 Envoi du rapport - userId:', selectedUserId);
 
       if (isEdit) {
         await rapportsAPI.update(editRapport.id, formData);
@@ -652,13 +689,22 @@ export default function RapportFormScreen() {
     );
   };
 
-  // Construction des options
-  const technicienOptions = techniciens.map(t => ({
-    label: `${t.prenom} ${t.nom} (${t.matricule})`,
-    value: t.id,
-    icon: 'person-outline',
-    color: Colors.primary,
-  }));
+  // =========================================================
+  // OPTIONS DES SÉLECTEURS
+  // =========================================================
+
+  // 🎯 Options utilisateurs avec badge de rôle
+  const userOptions = allUsers.map(u => {
+    const roleConf = getRoleConfig(u.role);
+    return {
+      label: `${u.prenom} ${u.nom}`,
+      subtitle: `${roleConf.label}${u.email ? ' • ' + u.email : ''}`,
+      value: u.id,
+      icon: roleConf.icon,
+      color: roleConf.color,
+      role: (u.role || '').toLowerCase(),
+    };
+  });
 
   const missionOptions = missions.map(m => ({
     label: m.titre,
@@ -669,6 +715,11 @@ export default function RapportFormScreen() {
 
   const getTypeColor = (value) => {
     const found = TYPES_INTERVENTION.find(t => t.value === value);
+    return found?.color || Colors.textMuted;
+  };
+
+  const getUserColor = (value) => {
+    const found = userOptions.find(o => o.value === value);
     return found?.color || Colors.textMuted;
   };
 
@@ -814,18 +865,28 @@ export default function RapportFormScreen() {
             />
           )}
 
+          {/* 🎯 SÉLECTION DE L'UTILISATEUR (au lieu du technicien) */}
           {!isTechnicien && (
-            <SearchableSelector
-              label="Technicien"
-              value={technicienId}
-              onChange={setTechnicienId}
-              options={technicienOptions}
-              placeholder="Sélectionner un technicien"
-              error={errors.technicienId}
-              touched={touched.technicienId}
-              onBlur={() => handleFieldBlur('technicienId')}
-              disabled={isEdit && !canEdit}
-            />
+            <>
+              <SearchableSelector
+                label="Utilisateur concerné"
+                value={selectedUserId}
+                onChange={setSelectedUserId}
+                options={userOptions}
+                placeholder={loadingUsers ? 'Chargement...' : 'Sélectionner un utilisateur'}
+                error={errors.selectedUserId}
+                touched={touched.selectedUserId}
+                onBlur={() => handleFieldBlur('selectedUserId')}
+                getOptionColor={getUserColor}
+                disabled={(isEdit && !canEdit) || loadingUsers}
+              />
+              {loadingUsers && (
+                <View style={styles.loadingUsersRow}>
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={styles.loadingUsersText}>Chargement des utilisateurs...</Text>
+                </View>
+              )}
+            </>
           )}
 
           <View style={styles.locationRow}>
@@ -923,7 +984,7 @@ export default function RapportFormScreen() {
 }
 
 // =========================================================
-// STYLES (inchangés)
+// STYLES
 // =========================================================
 
 const styles = StyleSheet.create({
@@ -1016,6 +1077,19 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 8,
     marginLeft: 4,
+  },
+
+  loadingUsersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: -8,
+    marginBottom: Spacing.md,
+    paddingLeft: 4,
+  },
+  loadingUsersText: {
+    fontSize: 12,
+    color: Colors.textMuted,
   },
 
   label: {
@@ -1246,10 +1320,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    flex: 1,
   },
   modalListItemText: {
     fontSize: 15,
     color: Colors.textPrimary,
+  },
+  modalListItemSubtitle: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
   },
   modalEmpty: {
     padding: 20,
@@ -1258,20 +1338,5 @@ const styles = StyleSheet.create({
   modalEmptyText: {
     fontSize: 14,
     color: Colors.textMuted,
-  },
-  modalCustomAdd: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    backgroundColor: Colors.primary + '15',
-    borderRadius: Radius.md,
-  },
-  modalCustomAddText: {
-    fontSize: 14,
-    color: Colors.primary,
-    fontWeight: '500',
-    marginLeft: 6,
   },
 });

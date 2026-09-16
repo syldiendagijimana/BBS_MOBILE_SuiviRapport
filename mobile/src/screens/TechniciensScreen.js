@@ -13,6 +13,8 @@ import {
   Animated,
   Dimensions,
   ScrollView,
+  Modal,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -37,6 +39,7 @@ const { width } = Dimensions.get('window');
 // =========================================================
 
 const SPECIALITES = [
+  { label: 'Toutes', value: null, icon: 'apps-outline', color: Colors.textMuted },
   { label: 'Fibre optique', icon: 'barcode-outline', color: Colors.primary },
   { label: 'Routeur', icon: 'router-outline', color: Colors.secondary },
   { label: 'Switch', icon: 'git-network-outline', color: Colors.info },
@@ -67,8 +70,8 @@ const getSpecialiteIcon = (specialite) => {
 
 export default function TechniciensScreen() {
   const navigation = useNavigation();
-  const { canManageTechniciens, isSuperviseur, isAdmin } = useAuth();
-  const canManage = canManageTechniciens || isSuperviseur || isAdmin;
+  const { canManageTechniciens, isSuperviseur, isAdmin, isDJ } = useAuth();
+  const canManage = canManageTechniciens || isSuperviseur || isAdmin || isDJ;
 
   // États
   const [techniciens, setTechniciens] = useState([]);
@@ -79,20 +82,19 @@ export default function TechniciensScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState(null);
+  const [specialiteMenuVisible, setSpecialiteMenuVisible] = useState(false);
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
   // =========================================================
-  // CHARGEMENT DES DONNÉES (CORRIGÉ)
+  // CHARGEMENT DES DONNÉES
   // =========================================================
 
   const loadData = useCallback(async () => {
     try {
-      // 🔐 Vérification des droits : admin, DJ ou superviseur
       if (!canManage) {
-        // Utilisateur non autorisé → on vide les listes et on arrête
         setTechniciens([]);
         setFiltered([]);
         setStats(null);
@@ -101,13 +103,11 @@ export default function TechniciensScreen() {
         return;
       }
 
-      // Appels API uniquement si autorisé
       const [data, statsData] = await Promise.all([
         techniciensAPI.list(),
         techniciensAPI.statistiques().catch(() => ({})),
       ]);
 
-      // ✅ Log pour déboguer la structure des données
       console.log('📦 Données techniciens reçues:', JSON.stringify(data, null, 2));
 
       const techniciensList = data?.data || data || [];
@@ -121,7 +121,7 @@ export default function TechniciensScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [canManage]); // ⬅️ Ajout de canManage comme dépendance
+  }, [canManage]);
 
   // Animation d'entrée
   useEffect(() => {
@@ -158,7 +158,6 @@ export default function TechniciensScreen() {
   useEffect(() => {
     let result = techniciens;
 
-    // Filtre par recherche
     if (search.trim()) {
       const q = search.toLowerCase().trim();
       result = result.filter(t =>
@@ -167,12 +166,10 @@ export default function TechniciensScreen() {
       );
     }
 
-    // Filtre par spécialité
     if (selectedSpecialite) {
       result = result.filter(t => t.specialite === selectedSpecialite);
     }
 
-    // Filtre par disponibilité
     if (selectedDisponible !== null) {
       result = result.filter(t => t.disponible === selectedDisponible);
     }
@@ -184,9 +181,7 @@ export default function TechniciensScreen() {
   // HANDLERS
   // =========================================================
 
-  // ✅ Correction : vérification de l'ID du technicien
   const handleToggleDisponible = async (technicien) => {
-    // Récupération de l'ID avec fallback
     const technicienId = technicien?.id || technicien?.technicien_id || technicien?.utilisateur_id;
 
     if (!technicienId) {
@@ -205,8 +200,9 @@ export default function TechniciensScreen() {
     }
   };
 
-  const handleSpecialiteFilter = (specialite) => {
-    setSelectedSpecialite(selectedSpecialite === specialite ? null : specialite);
+  const handleSpecialiteSelect = (specialite) => {
+    setSelectedSpecialite(specialite);
+    setSpecialiteMenuVisible(false);
   };
 
   const handleDisponibleFilter = (disponible) => {
@@ -226,11 +222,14 @@ export default function TechniciensScreen() {
     { key: 0, label: 'Occupé', color: Colors.danger },
   ];
 
+  const selectedSpecialiteLabel = selectedSpecialite
+    ? SPECIALITES.find(s => s.label === selectedSpecialite)?.label || selectedSpecialite
+    : 'Toutes';
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.primaryDark} />
 
-      {/* HEADER */}
       <GradientHeader style={styles.header}>
         <View style={styles.headerContent}>
           <TouchableOpacity
@@ -248,17 +247,25 @@ export default function TechniciensScreen() {
             </Text>
           </View>
 
-          {canManage ? (
+          <View style={styles.headerActions}>
             <TouchableOpacity
-              onPress={() => navigation.navigate('TechnicienForm', {})}
-              style={styles.addBtn}
+              onPress={() => setSpecialiteMenuVisible(true)}
+              style={styles.filterMenuBtn}
               activeOpacity={0.7}
             >
-              <Ionicons name="add" size={24} color={Colors.textWhite} />
+              <Ionicons name="options-outline" size={24} color={Colors.textWhite} />
             </TouchableOpacity>
-          ) : (
-            <View style={{ width: 44 }} />
-          )}
+
+            {canManage && (
+              <TouchableOpacity
+                onPress={() => navigation.navigate('TechnicienForm', {})}
+                style={styles.addBtn}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="add" size={24} color={Colors.textWhite} />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       </GradientHeader>
 
@@ -286,7 +293,7 @@ export default function TechniciensScreen() {
         </Animated.View>
       )}
 
-      {/* RECHERCHE ET FILTRES */}
+      {/* RECHERCHE ET FILTRES (minimisés) */}
       <Animated.View style={[styles.searchSection, { opacity: fadeAnim }]}>
         <SearchBar
           value={search}
@@ -294,35 +301,39 @@ export default function TechniciensScreen() {
           placeholder="Rechercher un technicien..."
         />
 
-        <View style={styles.filterContainer}>
-          <Text style={styles.filterLabel}>Filtrer par spécialité :</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-            {SPECIALITES.map((spec) => (
-              <Chip
-                key={spec.label}
-                label={spec.label}
-                selected={selectedSpecialite === spec.label}
-                onPress={() => handleSpecialiteFilter(spec.label)}
-                color={spec.color}
-                style={styles.filterChip}
-                icon={spec.icon}
-              />
-            ))}
-          </ScrollView>
-        </View>
+        <View style={styles.filterSummary}>
+          <TouchableOpacity
+            style={styles.filterBadge}
+            onPress={() => setSpecialiteMenuVisible(true)}
+          >
+            <Ionicons name="pricetag-outline" size={14} color={Colors.primary} />
+            <Text style={styles.filterBadgeText}>
+              {selectedSpecialiteLabel}
+            </Text>
+            <Ionicons name="chevron-down" size={14} color={Colors.primary} />
+          </TouchableOpacity>
 
-        <View style={styles.filterContainer}>
-          <Text style={styles.filterLabel}>Filtrer par disponibilité :</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dispoScroll}>
             {disponibleOptions.map((opt) => (
-              <Chip
+              <TouchableOpacity
                 key={opt.key}
-                label={opt.label}
-                selected={selectedDisponible === opt.key}
+                style={[
+                  styles.dispoChip,
+                  selectedDisponible === opt.key && styles.dispoChipSelected,
+                  { borderColor: opt.color }
+                ]}
                 onPress={() => handleDisponibleFilter(opt.key)}
-                color={opt.color}
-                style={styles.filterChip}
-              />
+              >
+                <Text style={[
+                  styles.dispoChipText,
+                  selectedDisponible === opt.key && { color: opt.color, fontWeight: '700' }
+                ]}>
+                  {opt.label}
+                </Text>
+                {selectedDisponible === opt.key && (
+                  <Ionicons name="checkmark" size={12} color={opt.color} />
+                )}
+              </TouchableOpacity>
             ))}
           </ScrollView>
         </View>
@@ -377,6 +388,66 @@ export default function TechniciensScreen() {
         )}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
       />
+
+      {/* MODAL MENU SPÉCIALITÉ */}
+      <Modal
+        visible={specialiteMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSpecialiteMenuVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setSpecialiteMenuVisible(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Filtrer par spécialité</Text>
+                  <TouchableOpacity onPress={() => setSpecialiteMenuVisible(false)}>
+                    <Ionicons name="close" size={24} color={Colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+
+                <FlatList
+                  data={SPECIALITES}
+                  keyExtractor={(item) => item.label}
+                  renderItem={({ item }) => {
+                    const isSelected = selectedSpecialite === item.label || (item.label === 'Toutes' && !selectedSpecialite);
+                    return (
+                      <TouchableOpacity
+                        style={[
+                          styles.menuItem,
+                          isSelected && styles.menuItemSelected,
+                        ]}
+                        onPress={() => {
+                          handleSpecialiteSelect(item.label === 'Toutes' ? null : item.label);
+                        }}
+                      >
+                        <View style={styles.menuItemLeft}>
+                          <Ionicons
+                            name={item.icon || 'apps-outline'}
+                            size={20}
+                            color={item.color || Colors.textMuted}
+                          />
+                          <Text style={[
+                            styles.menuItemText,
+                            isSelected && styles.menuItemTextSelected,
+                          ]}>
+                            {item.label}
+                          </Text>
+                        </View>
+                        {isSelected && (
+                          <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  }}
+                  ItemSeparatorComponent={() => <View style={styles.menuSeparator} />}
+                />
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </View>
   );
 }
@@ -507,7 +578,7 @@ function TechnicienCard({
 }
 
 // =========================================================
-// STYLES
+// STYLES (minimisés pour écran de téléphone)
 // =========================================================
 
 const styles = StyleSheet.create({
@@ -553,6 +624,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  filterMenuBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   addBtn: {
     width: 40,
     height: 40,
@@ -594,26 +678,59 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
-  // SEARCH
+  // SEARCH & FILTERS (minimisés)
   searchSection: {
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
     paddingBottom: Spacing.sm,
   },
-  filterContainer: {
-    marginTop: Spacing.sm,
-  },
-  filterLabel: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginBottom: 6,
-    fontWeight: '500',
-  },
-  filterScroll: {
+  filterSummary: {
     flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginTop: Spacing.sm,
+    gap: 4,
   },
-  filterChip: {
-    marginRight: 6,
+  // Badge spécialité compact
+  filterBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primary + '12',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.sm,
+    gap: 2,
+  },
+  filterBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.primary,
+    maxWidth: 80,
+  },
+  // Chips disponibilité compacts
+  dispoScroll: {
+    flexDirection: 'row',
+    maxHeight: 30,
+  },
+  dispoChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    marginRight: 4,
+    backgroundColor: Colors.surface,
+    gap: 2,
+  },
+  dispoChipSelected: {
+    backgroundColor: Colors.primary + '10',
+    borderWidth: 1.5,
+  },
+  dispoChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textSecondary,
   },
 
   // LIST
@@ -730,5 +847,63 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: Colors.primary,
     marginLeft: 6,
+  },
+
+  // MODAL MENU SPÉCIALITÉ
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    width: '85%',
+    maxHeight: '70%',
+    padding: Spacing.md,
+    ...Shadows.card,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.divider,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+  },
+  menuItemSelected: {
+    backgroundColor: Colors.primary + '08',
+    borderRadius: Radius.sm,
+  },
+  menuItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  menuItemText: {
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  menuItemTextSelected: {
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  menuSeparator: {
+    height: 1,
+    backgroundColor: Colors.divider,
   },
 });

@@ -69,6 +69,98 @@ const getTypeInfo = (value) =>
   };
 
 // =========================================================
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) {
+    return {
+      label: 'Utilisateur',
+      icon: 'person-outline',
+      color: Colors.textMuted,
+    };
+  }
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+};
+
+/**
+ * Détecte le rôle d'une permission à partir des champs renvoyés par l'API
+ */
+const getPermissionRole = (permission) => {
+  if (!permission) return null;
+  if (permission.role) return permission.role.toLowerCase();
+  if (permission.user_role) return permission.user_role.toLowerCase();
+  if (permission.superviseur_id || permission.superviseur_nom) return 'superviseur';
+  if (permission.technicien_id || permission.technicien_nom) return 'technicien';
+  return null;
+};
+
+/**
+ * Extrait le nom complet de la personne concernée, peu importe son rôle
+ */
+const getPermissionUser = (permission) => {
+  if (!permission) return { prenom: '', nom: '', role: null };
+
+  const role = getPermissionRole(permission);
+
+  if (role === 'superviseur') {
+    return {
+      role: 'superviseur',
+      prenom: permission.superviseur_prenom || '',
+      nom: permission.superviseur_nom || '',
+      email: permission.superviseur_email || null,
+      zone: permission.superviseur_zone_responsable || null,
+    };
+  }
+  if (role === 'technicien') {
+    return {
+      role: 'technicien',
+      prenom: permission.technicien_prenom || '',
+      nom: permission.technicien_nom || '',
+      email: permission.technicien_email || null,
+      matricule: permission.technicien_matricule || null,
+      specialite: permission.technicien_specialite || null,
+    };
+  }
+
+  // Admin / DJ ou générique
+  return {
+    role: role || 'utilisateur',
+    prenom: permission.user_prenom || permission.prenom || '',
+    nom: permission.user_nom || permission.nom || '',
+    email: permission.user_email || permission.email || null,
+  };
+};
+
+// =========================================================
 // COMPOSANT PRINCIPAL
 // =========================================================
 
@@ -81,6 +173,7 @@ export default function PermissionDetailScreen() {
 
   const [permission, setPermission] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
     loadPermission();
@@ -89,8 +182,9 @@ export default function PermissionDetailScreen() {
   const loadPermission = async () => {
     try {
       const response = await permissionsAPI.get(id);
-      setPermission(response.data);
+      setPermission(response?.data || response);
     } catch (error) {
+      console.error('❌ Erreur chargement permission:', error);
       Alert.alert('Erreur', 'Impossible de charger la permission');
       navigation.goBack();
     } finally {
@@ -99,69 +193,138 @@ export default function PermissionDetailScreen() {
   };
 
   const handleValidate = async (valide) => {
-    try {
-      await permissionsAPI.valider(id, valide);
-      Alert.alert('✅ Succès', `Permission ${valide ? 'validée' : 'refusée'} avec succès.`);
-      loadPermission();
-    } catch (error) {
-      Alert.alert('❌ Erreur', error.message);
-    }
+    Alert.alert(
+      valide ? 'Valider la permission' : 'Refuser la permission',
+      valide
+        ? 'Êtes-vous sûr de vouloir valider cette permission ?'
+        : 'Êtes-vous sûr de vouloir refuser cette permission ? L\'action correspondante disparaîtra de l\'accueil de la personne concernée.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: valide ? 'Valider' : 'Refuser',
+          style: valide ? 'default' : 'destructive',
+          onPress: async () => {
+            setActionLoading(true);
+            try {
+              await permissionsAPI.valider(id, valide);
+              Alert.alert('✅ Succès', `Permission ${valide ? 'validée' : 'refusée'} avec succès.`);
+              loadPermission();
+            } catch (error) {
+              Alert.alert('❌ Erreur', error.message || 'Une erreur est survenue');
+            } finally {
+              setActionLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleDelete = async () => {
-    Alert.alert('Supprimer la permission', 'Êtes-vous sûr de vouloir supprimer cette permission ?', [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Supprimer',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await permissionsAPI.delete(id);
-            Alert.alert('✅ Succès', 'Permission supprimée.');
-            navigation.goBack();
-          } catch (error) {
-            Alert.alert('❌ Erreur', error.message);
-          }
+    Alert.alert(
+      'Supprimer la permission',
+      'Êtes-vous sûr de vouloir supprimer cette permission ? Cette action est irréversible et retirera l\'accès correspondant de l\'accueil de la personne concernée.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            setActionLoading(true);
+            try {
+              await permissionsAPI.delete(id);
+              Alert.alert('✅ Succès', 'Permission supprimée.');
+              navigation.goBack();
+            } catch (error) {
+              Alert.alert('❌ Erreur', error.message || 'Une erreur est survenue');
+            } finally {
+              setActionLoading(false);
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
+
+  // =========================================================
+  // RENDU CONDITIONNEL
+  // =========================================================
 
   if (loading) {
     return (
       <View style={styles.centered}>
+        <StatusBar barStyle="light-content" backgroundColor={Colors.primaryDark} />
         <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Chargement...</Text>
       </View>
     );
   }
 
-  if (!permission) return null;
+  if (!permission) {
+    return (
+      <View style={styles.centered}>
+        <StatusBar barStyle="light-content" backgroundColor={Colors.primaryDark} />
+        <Ionicons name="alert-circle-outline" size={48} color={Colors.textMuted} />
+        <Text style={styles.loadingText}>Permission introuvable</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backAction}>
+          <Text style={styles.backActionText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // =========================================================
+  // DONNÉES CALCULÉES
+  // =========================================================
 
   const typeInfo = getTypeInfo(permission.type_permission);
   const estValide = permission.est_valide === 1;
-  const statusColor = estValide ? Colors.success : Colors.warning;
-  const statusLabel = estValide ? 'Validé' : 'En attente';
+  const estRefuse = permission.est_valide === -1 || permission.est_valide === 2;
+  const estEnAttente = !estValide && !estRefuse;
 
-  const superviseurNom = `${permission.superviseur_prenom || ''} ${permission.superviseur_nom || ''}`.trim() || 'Non défini';
-  const technicienNom = permission.technicien_id
-    ? `${permission.technicien_prenom || ''} ${permission.technicien_nom || ''}`.trim() || 'Non défini'
-    : null;
-  const valideParNom = estValide && permission.valide_par_nom
+  const statusColor = estValide
+    ? Colors.success
+    : estRefuse
+    ? Colors.danger
+    : Colors.warning;
+
+  const statusLabel = estValide
+    ? 'Validé'
+    : estRefuse
+    ? 'Refusé'
+    : 'En attente';
+
+  const statusIcon = estValide
+    ? 'checkmark-circle'
+    : estRefuse
+    ? 'close-circle'
+    : 'time-outline';
+
+  // Rôle et utilisateur concerné
+  const role = getPermissionRole(permission);
+  const roleConfig = getRoleConfig(role);
+  const userInfo = getPermissionUser(permission);
+  const userFullName = `${userInfo.prenom} ${userInfo.nom}`.trim() || 'Non défini';
+
+  const valideParNom = permission.valide_par_nom
     ? `${permission.valide_par_prenom || ''} ${permission.valide_par_nom || ''}`.trim() || 'Inconnu'
     : null;
+
   const dateCreation = permission.created_at
     ? new Date(permission.created_at).toLocaleString('fr-FR')
     : 'Inconnue';
+
   const dateValidation = permission.date_validation
     ? new Date(permission.date_validation).toLocaleString('fr-FR')
     : null;
 
-  // Vérifier si l'utilisateur peut agir (admin ou DJ) et si la permission est en attente
-  const canAct = canManage && !estValide;
+  // Vérifier si l'utilisateur peut agir
+  const canAct = canManage && estEnAttente;
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.primaryDark} />
+
       <GradientHeader style={styles.header}>
         <View style={styles.headerContent}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
@@ -172,7 +335,27 @@ export default function PermissionDetailScreen() {
         </View>
       </GradientHeader>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Indicateur de statut en haut */}
+        <View style={[styles.statusBanner, { backgroundColor: statusColor + '15', borderColor: statusColor + '40' }]}>
+          <Ionicons name={statusIcon} size={28} color={statusColor} />
+          <View style={styles.statusBannerText}>
+            <Text style={[styles.statusBannerLabel, { color: statusColor }]}>
+              {statusLabel}
+            </Text>
+            <Text style={styles.statusBannerSubtitle}>
+              {estValide
+                ? 'Cette permission est active'
+                : estRefuse
+                ? 'Cette permission a été refusée'
+                : 'En attente de validation'}
+            </Text>
+          </View>
+        </View>
+
         {/* Carte principale */}
         <View style={styles.card}>
           {/* Type */}
@@ -186,21 +369,63 @@ export default function PermissionDetailScreen() {
             </View>
           </View>
 
-          {/* Superviseur */}
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Superviseur</Text>
-            <Text style={styles.value}>{superviseurNom}</Text>
+          {/* Section : Utilisateur concerné */}
+          <View style={styles.sectionHeader}>
+            <Ionicons name="person-circle-outline" size={16} color={Colors.textMuted} />
+            <Text style={styles.sectionTitle}>Utilisateur concerné</Text>
           </View>
 
-          {/* Technicien (optionnel) */}
-          {technicienNom !== null && (
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Nom complet</Text>
+            <Text style={styles.value}>{userFullName}</Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Rôle</Text>
+            <View style={styles.roleInfoValue}>
+              <View style={[styles.roleTag, { backgroundColor: roleConfig.color + '20' }]}>
+                <Ionicons name={roleConfig.icon} size={12} color={roleConfig.color} />
+                <Text style={[styles.roleTagText, { color: roleConfig.color }]}>
+                  {roleConfig.label}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {userInfo.email && (
             <View style={styles.infoRow}>
-              <Text style={styles.label}>Technicien concerné</Text>
-              <Text style={styles.value}>{technicienNom}</Text>
+              <Text style={styles.label}>Email</Text>
+              <Text style={styles.value} numberOfLines={1}>{userInfo.email}</Text>
             </View>
           )}
 
-          {/* Statut */}
+          {userInfo.zone && (
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Zone responsable</Text>
+              <Text style={styles.value}>{userInfo.zone}</Text>
+            </View>
+          )}
+
+          {userInfo.matricule && (
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Matricule</Text>
+              <Text style={styles.value}>{userInfo.matricule}</Text>
+            </View>
+          )}
+
+          {userInfo.specialite && (
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Spécialité</Text>
+              <Text style={styles.value}>{userInfo.specialite}</Text>
+            </View>
+          )}
+
+          {/* Section : Validation */}
+          <View style={styles.sectionHeader}>
+            <Ionicons name="shield-checkmark-outline" size={16} color={Colors.textMuted} />
+            <Text style={styles.sectionTitle}>Validation</Text>
+          </View>
+
           <View style={styles.infoRow}>
             <Text style={styles.label}>Statut</Text>
             <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
@@ -208,7 +433,6 @@ export default function PermissionDetailScreen() {
             </View>
           </View>
 
-          {/* Validateur */}
           {valideParNom !== null && (
             <View style={styles.infoRow}>
               <Text style={styles.label}>Validé par</Text>
@@ -216,67 +440,108 @@ export default function PermissionDetailScreen() {
             </View>
           )}
 
-          {/* Date de création */}
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Date de création</Text>
-            <Text style={styles.value}>{dateCreation}</Text>
-          </View>
-
-          {/* Date de validation */}
           {dateValidation !== null && (
             <View style={styles.infoRow}>
               <Text style={styles.label}>Date de validation</Text>
               <Text style={styles.value}>{dateValidation}</Text>
             </View>
           )}
+
+          {/* Section : Dates */}
+          <View style={styles.sectionHeader}>
+            <Ionicons name="calendar-outline" size={16} color={Colors.textMuted} />
+            <Text style={styles.sectionTitle}>Dates</Text>
+          </View>
+
+          <View style={[styles.infoRow, styles.infoRowLast]}>
+            <Text style={styles.label}>Date de création</Text>
+            <Text style={styles.value}>{dateCreation}</Text>
+          </View>
         </View>
 
         {/* Actions (si en attente et admin/DJ) */}
         {canAct && (
           <View style={styles.actionsContainer}>
             <TouchableOpacity
-              style={[styles.actionBtn, styles.validateBtn]}
+              style={[styles.actionBtn, styles.validateBtn, actionLoading && styles.actionBtnDisabled]}
               onPress={() => handleValidate(true)}
               activeOpacity={0.7}
+              disabled={actionLoading}
             >
-              <Ionicons name="checkmark-outline" size={20} color={Colors.textWhite} />
-              <Text style={styles.actionText}>Valider</Text>
+              {actionLoading ? (
+                <ActivityIndicator size="small" color={Colors.textWhite} />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-outline" size={20} color={Colors.textWhite} />
+                  <Text style={styles.actionText}>Valider</Text>
+                </>
+              )}
             </TouchableOpacity>
+
             <TouchableOpacity
-              style={[styles.actionBtn, styles.rejectBtn]}
+              style={[styles.actionBtn, styles.rejectBtn, actionLoading && styles.actionBtnDisabled]}
               onPress={() => handleValidate(false)}
               activeOpacity={0.7}
+              disabled={actionLoading}
             >
-              <Ionicons name="close-outline" size={20} color={Colors.textWhite} />
-              <Text style={styles.actionText}>Refuser</Text>
+              {actionLoading ? (
+                <ActivityIndicator size="small" color={Colors.textWhite} />
+              ) : (
+                <>
+                  <Ionicons name="close-outline" size={20} color={Colors.textWhite} />
+                  <Text style={styles.actionText}>Refuser</Text>
+                </>
+              )}
             </TouchableOpacity>
+
             <TouchableOpacity
-              style={[styles.actionBtn, styles.deleteBtn]}
+              style={[styles.actionBtn, styles.deleteBtn, actionLoading && styles.actionBtnDisabled]}
               onPress={handleDelete}
               activeOpacity={0.7}
+              disabled={actionLoading}
             >
               <Ionicons name="trash-outline" size={20} color={Colors.danger} />
             </TouchableOpacity>
           </View>
         )}
 
-        {/* Si déjà validée ou refusée, afficher un message */}
+        {/* Message si déjà validée */}
         {estValide && (
           <View style={styles.infoMessage}>
             <Ionicons name="checkmark-circle-outline" size={24} color={Colors.success} />
-            <Text style={styles.infoMessageText}>Cette permission a déjà été validée.</Text>
+            <Text style={styles.infoMessageText}>
+              Cette permission a déjà été validée.
+            </Text>
           </View>
         )}
 
-        {!canManage && !estValide && (
+        {/* Message si refusée */}
+        {estRefuse && (
+          <View style={[styles.infoMessage, { backgroundColor: Colors.danger + '10' }]}>
+            <Ionicons name="close-circle-outline" size={24} color={Colors.danger} />
+            <Text style={[styles.infoMessageText, { color: Colors.danger }]}>
+              Cette permission a été refusée.
+            </Text>
+          </View>
+        )}
+
+        {/* Message si pas les droits */}
+        {!canManage && estEnAttente && (
           <View style={styles.infoMessage}>
             <Ionicons name="lock-closed-outline" size={24} color={Colors.textMuted} />
-            <Text style={styles.infoMessageText}>Seul un administrateur ou un DJ peut gérer cette permission.</Text>
+            <Text style={styles.infoMessageText}>
+              Seul un administrateur ou un DJ peut gérer cette permission.
+            </Text>
           </View>
         )}
 
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backAction}>
-          <Text style={styles.backActionText}>Retour</Text>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backAction}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back-outline" size={18} color={Colors.primary} />
+          <Text style={styles.backActionText}>Retour à la liste</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -288,8 +553,23 @@ export default function PermissionDetailScreen() {
 // =========================================================
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: Colors.textMuted,
+    marginTop: 8,
+  },
+
+  // HEADER
   header: {
     paddingTop: 50,
     paddingBottom: 16,
@@ -317,7 +597,37 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
   },
-  content: { padding: Spacing.lg, paddingBottom: 40 },
+
+  // CONTENT
+  content: {
+    padding: Spacing.lg,
+    paddingBottom: 40,
+  },
+
+  // STATUS BANNER
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: Spacing.md,
+  },
+  statusBannerText: {
+    flex: 1,
+  },
+  statusBannerLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  statusBannerSubtitle: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+
+  // CARD
   card: {
     backgroundColor: Colors.surface,
     borderRadius: 12,
@@ -330,6 +640,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: Spacing.md,
+    paddingBottom: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.divider,
   },
   iconContainer: {
     width: 60,
@@ -339,69 +652,161 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: Spacing.md,
   },
-  typeTextContainer: { flex: 1 },
-  typeLabel: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
-  typeValue: { fontSize: 14, color: Colors.textMuted, marginTop: 2 },
+  typeTextContainer: {
+    flex: 1,
+  },
+  typeLabel: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  typeValue: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+
+  // SECTION HEADER
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: Spacing.md,
+    marginBottom: 4,
+    paddingBottom: 4,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  // INFO ROWS
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 8,
+    alignItems: 'center',
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: Colors.divider,
+    gap: 12,
   },
-  label: { fontSize: 14, color: Colors.textMuted, fontWeight: '500' },
-  value: { fontSize: 14, color: Colors.textPrimary, fontWeight: '500' },
+  infoRowLast: {
+    borderBottomWidth: 0,
+  },
+  label: {
+    fontSize: 14,
+    color: Colors.textMuted,
+    fontWeight: '500',
+    flexShrink: 0,
+  },
+  value: {
+    fontSize: 14,
+    color: Colors.textPrimary,
+    fontWeight: '500',
+    textAlign: 'right',
+    flex: 1,
+  },
+
+  // ROLE TAG
+  roleInfoValue: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  roleTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  roleTagText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // STATUS BADGE
   statusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 12,
     alignSelf: 'center',
   },
-  statusText: { fontSize: 12, fontWeight: '600' },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  // ACTIONS
   actionsContainer: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: Spacing.md,
+    marginTop: Spacing.sm,
   },
   actionBtn: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingVertical: 14,
+    borderRadius: 10,
     gap: 6,
   },
-  actionText: { color: Colors.textWhite, fontWeight: '600', fontSize: 14 },
-  validateBtn: { backgroundColor: Colors.success },
-  rejectBtn: { backgroundColor: Colors.danger },
+  actionBtnDisabled: {
+    opacity: 0.6,
+  },
+  actionText: {
+    color: Colors.textWhite,
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  validateBtn: {
+    backgroundColor: Colors.success,
+    flex: 1,
+  },
+  rejectBtn: {
+    backgroundColor: Colors.danger,
+    flex: 1,
+  },
   deleteBtn: {
     backgroundColor: Colors.danger + '15',
     borderWidth: 1,
     borderColor: Colors.danger + '30',
+    paddingHorizontal: 16,
   },
+
+  // INFO MESSAGE
   infoMessage: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Colors.background,
-    padding: 12,
-    borderRadius: 8,
+    padding: 14,
+    borderRadius: 10,
     marginTop: Spacing.md,
-    gap: 8,
+    gap: 10,
   },
   infoMessageText: {
-    fontSize: 14,
+    fontSize: 13,
     color: Colors.textSecondary,
     flex: 1,
+    lineHeight: 18,
   },
+
+  // BACK ACTION
   backAction: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    marginTop: 8,
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    marginTop: 16,
   },
   backActionText: {
     color: Colors.primary,
     fontWeight: '600',
-    fontSize: 16,
+    fontSize: 15,
   },
 });

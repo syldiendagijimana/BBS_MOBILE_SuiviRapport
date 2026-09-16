@@ -8,7 +8,7 @@ const {
     isAdminOrDJ,
     isSuperviseur,
     isTechnicien,
-    hasPermission,   // <-- AJOUT
+    hasPermission,
     logUserAction
 } = require('../middleware/auth');
 
@@ -508,8 +508,12 @@ router.get('/:id/rapports', authenticate, isSuperviseur, hasPermission('voir_sup
     }
 });
 
+// ========================================================
+// ✅ CORRECTION : Remplacer isAdmin par isAdminOrDJ
+// ========================================================
+
 // POST /superviseurs - CRÉER UN SUPERVISEUR
-router.post('/', authenticate, isAdmin, hasPermission('creer_superviseur'), (req, res) => {
+router.post('/', authenticate, isAdminOrDJ, hasPermission('creer_superviseur'), (req, res) => {
     try {
         const { nom, prenom, email, mot_de_passe, telephone, zone_responsable, niveau_experience, telephone_pro } = req.body;
 
@@ -548,7 +552,7 @@ router.post('/', authenticate, isAdmin, hasPermission('creer_superviseur'), (req
 });
 
 // PUT /superviseurs/:id - MODIFIER UN SUPERVISEUR
-router.put('/:id', authenticate, isAdmin, hasPermission('modifier_superviseur'), (req, res) => {
+router.put('/:id', authenticate, isAdminOrDJ, hasPermission('modifier_superviseur'), (req, res) => {
     try {
         const superviseurId = parseInt(req.params.id);
         const { nom, prenom, email, telephone, mot_de_passe, zone_responsable, niveau_experience, telephone_pro } = req.body;
@@ -589,7 +593,7 @@ router.put('/:id', authenticate, isAdmin, hasPermission('modifier_superviseur'),
 });
 
 // DELETE /superviseurs/:id - SUPPRIMER UN SUPERVISEUR
-router.delete('/:id', authenticate, isAdmin, hasPermission('supprimer_superviseur'), (req, res) => {
+router.delete('/:id', authenticate, isAdminOrDJ, hasPermission('supprimer_superviseur'), (req, res) => {
     try {
         const superviseurId = parseInt(req.params.id);
         const db = getDb();

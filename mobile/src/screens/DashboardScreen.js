@@ -33,64 +33,58 @@ const { width } = Dimensions.get('window');
 // CONFIGURATION DES PERMISSIONS PAR RÔLE
 // =========================================================
 
-/**
- * Définit les actions rapides accessibles à chaque rôle.
- * Clé : role (technicien, superviseur, dj, admin)
- * Valeur : tableau d'objets { icon, label, screen, color, params?, requiredPermission? }
- *
- * `requiredPermission` (uniquement pour technicien / superviseur) correspond
- * à une valeur de TYPES_PERMISSION dans PermissionsScreen.js. Si l'utilisateur
- * n'a pas cette permission validée (ou si elle lui a été retirée), l'action
- * disparaît automatiquement de son accueil. Une action sans `requiredPermission`
- * reste toujours visible (ex: Profil).
- *
- * Admin et DJ gèrent eux-mêmes les permissions des autres : leur propre menu
- * reste donc complet par défaut, inchangé.
- */
 const ACTIONS_BY_ROLE = {
   technicien: [
-    { icon: 'document-text', label: 'Nouveau rapport', screen: 'Rapports', color: Colors.primary, requiredPermission: 'creer_rapport' },
-    { icon: 'alert-circle', label: 'Signaler incident', screen: 'Incidents', color: Colors.danger, requiredPermission: 'creer_incident' },
-    { icon: 'briefcase', label: 'Mes missions', screen: 'Missions', color: Colors.secondary, requiredPermission: 'voir_missions' },
-    { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning, requiredPermission: 'voir_reseau' },
-    { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54', requiredPermission: 'voir_messages' },
-    { icon: 'person-circle', label: 'Profil', screen: 'Profile', color: Colors.info },
+    { icon: 'document-text', label: 'Nouveau rapport', screen: 'Rapports', color: Colors.primary },
+    { icon: 'list-outline', label: 'Mes rapports', screen: 'Rapports', color: Colors.info },
+    { icon: 'alert-circle', label: 'Signaler incident', screen: 'Incidents', color: Colors.danger },
+    { icon: 'briefcase', label: 'Mes missions', screen: 'Missions', color: Colors.secondary },
+    { icon: 'calendar-outline', label: 'Planification', screen: 'Missions', color: Colors.accent },
+    { icon: 'construct', label: 'Interventions', screen: 'Missions', color: Colors.warning },
+    { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning },
+    { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54' },
+
   ],
   superviseur: [
-    { icon: 'document-text', label: 'Rapports', screen: 'Rapports', color: Colors.primary, requiredPermission: 'voir_rapports' },
-    { icon: 'alert-circle', label: 'Incidents', screen: 'Incidents', color: Colors.danger, requiredPermission: 'voir_incidents' },
-    { icon: 'briefcase', label: 'Missions', screen: 'Missions', color: Colors.secondary, requiredPermission: 'voir_missions' },
-    { icon: 'construct', label: 'Techniciens', screen: 'Techniciens', color: Colors.info, requiredPermission: 'voir_techniciens' },
+    { icon: 'document-text', label: 'Rapports', screen: 'Rapports', color: Colors.primary },
+    { icon: 'alert-circle', label: 'Incidents', screen: 'Incidents', color: Colors.danger },
+    { icon: 'briefcase', label: 'Missions', screen: 'Missions', color: Colors.secondary },
+    { icon: 'calendar', label: 'Planifier', screen: 'Missions', color: Colors.secondary },
+    { icon: 'construct', label: 'Techniciens', screen: 'Techniciens', color: Colors.info },
     { icon: 'call-outline', label: 'Suivi client', screen: 'SuiviClients', color: Colors.primary },
-    { icon: 'stats-chart', label: 'Statistiques', screen: 'Statistiques', color: Colors.primaryLight, requiredPermission: 'voir_statistiques' },
-    { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning, requiredPermission: 'voir_reseau' },
-    { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54', requiredPermission: 'voir_messages' },
+    { icon: 'stats-chart', label: 'Statistiques', screen: 'Statistiques', color: Colors.primaryLight },
+    { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning },
+    { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54' },
   ],
   dj: [
     { icon: 'document-text', label: 'Rapports', screen: 'Rapports', color: Colors.primary },
     { icon: 'alert-circle', label: 'Incidents', screen: 'Incidents', color: Colors.danger },
     { icon: 'briefcase', label: 'Missions', screen: 'Missions', color: Colors.secondary },
+    { icon: 'calendar', label: 'Planifier', screen: 'Missions', color: Colors.secondary },
     { icon: 'construct', label: 'Techniciens', screen: 'Techniciens', color: Colors.info },
+     { icon: 'people', label: 'Superviseurs', screen: 'Superviseurs', color: Colors.secondary },
+      { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54' },
     { icon: 'call-outline', label: 'Suivi client', screen: 'SuiviClients', color: Colors.primary },
-    { icon: 'stats-chart', label: 'Statistiques', screen: 'Statistiques', color: Colors.primaryLight },
-    { icon: 'people', label: 'Superviseurs', screen: 'Superviseurs', color: Colors.secondary },
-    { icon: 'key-outline', label: 'Permissions', screen: 'Permissions', color: Colors.accent },
     { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning },
-    { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54' },
+
   ],
   admin: [
     { icon: 'document-text', label: 'Rapports', screen: 'Rapports', color: Colors.primary },
     { icon: 'alert-circle', label: 'Incidents', screen: 'Incidents', color: Colors.danger },
     { icon: 'briefcase', label: 'Missions', screen: 'Missions', color: Colors.secondary },
-    { icon: 'construct', label: 'Techniciens', screen: 'Techniciens', color: Colors.info },
-    { icon: 'call-outline', label: 'Suivi client', screen: 'SuiviClients', color: Colors.primary },
-    { icon: 'stats-chart', label: 'Statistiques', screen: 'Statistiques', color: Colors.primaryLight },
     { icon: 'people', label: 'Utilisateurs', screen: 'Users', color: Colors.secondary },
-    { icon: 'key-outline', label: 'Permissions', screen: 'Permissions', color: Colors.accent },
-    { icon: 'time-outline', label: 'Historique', screen: 'Historique', color: Colors.accent },
     { icon: 'people', label: 'Superviseurs', screen: 'Superviseurs', color: Colors.secondary },
-    { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning },
+    { icon: 'construct', label: 'Techniciens', screen: 'Techniciens', color: Colors.info },
+    { icon: 'calendar', label: 'Planifier', screen: 'Missions', color: Colors.secondary },
+    { icon: 'call-outline', label: 'Suivi client', screen: 'SuiviClients', color: Colors.primary },
     { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54' },
+    { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning },
+    { icon: 'stats-chart', label: 'Statistiques', screen: 'Statistiques', color: Colors.primaryLight },
+    { icon: 'key-outline', label: 'Permissions', screen: 'Permissions', color: Colors.accent },
+
+
+
+
   ],
 };
 
@@ -120,52 +114,59 @@ export default function DashboardScreen() {
   } = useAuth();
   const navigation = useNavigation();
 
-  // États
   const [stats, setStats] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [reseauEtat, setReseauEtat] = useState([]);
-
-  // Permissions réellement accordées à l'utilisateur courant (technicien/superviseur).
-  // C'est cet ensemble qui pilote l'affichage des actions rapides : si une
-  // permission est retirée côté admin/DJ, l'action correspondante disparaît
-  // ici dès le prochain rafraîchissement, sans rien changer au reste du Dashboard.
   const [grantedPermissions, setGrantedPermissions] = useState(new Set());
 
-  // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
-
-  // Polling ref
   const pollingRef = useRef(null);
 
   // =========================================================
-  // CHARGEMENT DES PERMISSIONS DE L'UTILISATEUR (réaction système)
+  // CHARGEMENT DES PERMISSIONS DE L'UTILISATEUR (inutilisé pour l'affichage)
   // =========================================================
 
   const loadMyPermissions = useCallback(async () => {
-    // Admin et DJ gèrent les permissions eux-mêmes : leur menu reste complet
-    // par défaut, inutile d'aller vérifier quoi que ce soit.
-    if (isAdmin || isDJ || !user?.id) return;
+    // On garde ce chargement pour d'éventuelles utilisations futures,
+    // mais on n'en tient pas compte pour l'affichage des actions.
+    if (isAdmin || isDJ || isSuperviseur || isTechnicien || !user?.id) return;
 
     try {
-      const res = await permissionsAPI.list({ userId: user.id }).catch(() => ({ data: [] }));
+      let roleId = null;
+      let roleType = null;
+
+      if (isTechnicien && user?.roleData?.id) {
+        roleId = user.roleData.id;
+        roleType = 'technicien_id';
+      }
+
+      const params = {};
+      if (roleId && roleType) {
+        params[roleType] = roleId;
+      } else {
+        params.user_id = user.id;
+      }
+
+      const res = await permissionsAPI.list(params).catch(() => ({ data: [] }));
       const list = res?.data || res || [];
+
       const mine = (Array.isArray(list) ? list : []).filter((p) => {
         const concerneMoi =
-          p.technicien_id === user.id ||
-          p.superviseur_id === user.id ||
+          (p.technicien_id === roleId && roleType === 'technicien_id') ||
           p.user_id === user.id;
         return concerneMoi && p.est_valide === 1;
       });
+
       setGrantedPermissions(new Set(mine.map((p) => p.type_permission)));
     } catch (error) {
       console.error('❌ Erreur chargement permissions utilisateur:', error);
     }
-  }, [isAdmin, isDJ, user]);
+  }, [isAdmin, isDJ, isSuperviseur, isTechnicien, user]);
 
   // =========================================================
   // CHARGEMENT DES DONNÉES
@@ -173,7 +174,6 @@ export default function DashboardScreen() {
 
   const loadData = useCallback(async () => {
     try {
-      // 🔐 Appel conditionnel aux statistiques (réservé admin, superviseur, DJ)
       const statsPromise = (isAdmin || isSuperviseur || isDJ)
         ? statsAPI.dashboard().catch(() => ({}))
         : Promise.resolve({});
@@ -192,8 +192,6 @@ export default function DashboardScreen() {
       const reseauData = reseau?.data || reseau || [];
       setReseauEtat(Array.isArray(reseauData) ? reseauData : []);
 
-      // On rafraîchit aussi les permissions de l'utilisateur à chaque
-      // chargement du Dashboard (pull-to-refresh, focus, etc.).
       await loadMyPermissions();
     } catch (error) {
       console.error('❌ Erreur chargement dashboard:', error);
@@ -204,60 +202,32 @@ export default function DashboardScreen() {
     }
   }, [isAdmin, isSuperviseur, isDJ, loadMyPermissions]);
 
-  // Animation d'entrée
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 600,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 600,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 6,
-        tension: 40,
-        useNativeDriver: true,
-      }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 600, useNativeDriver: true }),
+      Animated.spring(scaleAnim, { toValue: 1, friction: 6, tension: 40, useNativeDriver: true }),
     ]).start();
   }, []);
 
-  // Chargement initial
   useEffect(() => {
     loadData();
 
     pollingRef.current = setInterval(() => {
-      notificationsAPI.getUnreadCount()
-        .then(setUnreadCount)
-        .catch(() => {});
-
-      // Réaction système : si un admin/DJ retire une permission pendant que
-      // l'utilisateur a son Dashboard ouvert, l'action rapide correspondante
-      // disparaît automatiquement au prochain cycle (sans devoir relancer l'app).
+      notificationsAPI.getUnreadCount().then(setUnreadCount).catch(() => {});
       loadMyPermissions();
     }, 30000);
 
     return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-      }
+      if (pollingRef.current) clearInterval(pollingRef.current);
     };
   }, [loadData, loadMyPermissions]);
 
-  // Rafraîchissement au focus
   useFocusEffect(
     useCallback(() => {
       loadData();
     }, [loadData])
   );
-
-  // =========================================================
-  // HANDLERS
-  // =========================================================
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -269,54 +239,27 @@ export default function DashboardScreen() {
   };
 
   // =========================================================
-  // FONCTIONS DE RÔLE
+  // RÉCUPÉRATION DES ACTIONS SANS FILTRAGE (pour tous les rôles)
   // =========================================================
 
-  /**
-   * Retourne la liste des actions rapides selon le rôle de l'utilisateur,
-   * filtrée par ses permissions réellement accordées.
-   *
-   * - Admin / DJ : menu complet, inchangé (ils gèrent les permissions, pas
-   *   l'inverse).
-   * - Superviseur / Technicien : chaque action qui déclare une
-   *   `requiredPermission` n'apparaît que si cette permission est présente
-   *   dans `grantedPermissions`. Une action sans `requiredPermission`
-   *   (ex: Profil, Suivi client) reste toujours visible.
-   */
   const getActions = () => {
-    let list;
-    if (isAdmin) list = ACTIONS_BY_ROLE.admin;
-    else if (isDJ) list = ACTIONS_BY_ROLE.dj;
-    else if (isSuperviseur) list = ACTIONS_BY_ROLE.superviseur;
-    else if (isTechnicien) list = ACTIONS_BY_ROLE.technicien;
-    else {
-      // Fallback : actions de base (tous)
-      list = [
-        { icon: 'document-text', label: 'Rapports', screen: 'Rapports', color: Colors.primary },
-        { icon: 'alert-circle', label: 'Incidents', screen: 'Incidents', color: Colors.danger },
-      ];
-    }
-
-    // Le Dashboard de l'admin et du DJ reste identique par défaut.
-    if (isAdmin || isDJ) return list;
-
-    // Pour superviseur / technicien : on retire du menu toute action dont la
-    // permission requise n'est plus accordée.
-    return list.filter((action) => {
-      if (!action.requiredPermission) return true;
-      return grantedPermissions.has(action.requiredPermission);
-    });
+    if (isAdmin) return ACTIONS_BY_ROLE.admin;
+    if (isDJ) return ACTIONS_BY_ROLE.dj;
+    if (isSuperviseur) return ACTIONS_BY_ROLE.superviseur;
+    if (isTechnicien) return ACTIONS_BY_ROLE.technicien;
+    // Fallback
+    return [
+      { icon: 'document-text', label: 'Rapports', screen: 'Rapports', color: Colors.primary },
+      { icon: 'alert-circle', label: 'Incidents', screen: 'Incidents', color: Colors.danger },
+    ];
   };
 
-  /**
-   * Retourne les statistiques à afficher en fonction du rôle.
-   */
   const getStatsToShow = () => {
     if (isAdmin) return STATS_CONFIG.admin;
     if (isDJ) return STATS_CONFIG.dj;
     if (isSuperviseur) return STATS_CONFIG.superviseur;
     if (isTechnicien) return STATS_CONFIG.technicien;
-    return ['interventions', 'incidentsOuverts']; // fallback
+    return ['interventions', 'incidentsOuverts'];
   };
 
   // =========================================================
@@ -352,14 +295,11 @@ export default function DashboardScreen() {
 
   const getReseauSante = () => {
     const zones = Array.isArray(reseauEtat) ? reseauEtat : [];
-
     if (zones.length === 0) {
       return { icon: 'wifi-outline', color: Colors.textMuted, label: 'Données non disponibles', count: 0 };
     }
-
     const zonesCritiques = zones.filter(z => z.statut === 'critique' || z.statut === 'panne');
     const zonesCongestion = zones.filter(z => z.statut === 'congestion');
-
     if (zonesCritiques.length > 0) {
       return {
         icon: 'alert-circle',
@@ -387,7 +327,6 @@ export default function DashboardScreen() {
   const reseauInfo = getReseauSante();
   const zonesCount = Array.isArray(reseauEtat) ? reseauEtat.length : 0;
 
-  // Statistiques rapides (préparation pour l'affichage conditionnel)
   const statsData = {
     interventions: stats?.rapports?.total || 0,
     incidentsOuverts: stats?.incidents?.ouverts || 0,
@@ -411,7 +350,6 @@ export default function DashboardScreen() {
   const actions = getActions();
   const statsKeys = getStatsToShow();
 
-  // Filtrer les statistiques à afficher selon le rôle
   const filteredStats = statsKeys.map(key => ({
     key,
     label: getStatLabel(key),
@@ -424,7 +362,6 @@ export default function DashboardScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.primary} />
 
-      {/* ===== HEADER ===== */}
       <GradientHeader style={styles.header}>
         <View style={styles.headerContent}>
           <View style={styles.headerLeft}>
@@ -455,7 +392,6 @@ export default function DashboardScreen() {
         </View>
       </GradientHeader>
 
-      {/* ===== CONTENU SCROLL ===== */}
       <Animated.ScrollView
         style={[styles.scroll, { opacity: fadeAnim }]}
         contentContainerStyle={styles.scrollContent}
@@ -469,7 +405,7 @@ export default function DashboardScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
-        {/* ===== CARTE RÉSEAU ===== */}
+        {/* CARTE RÉSEAU */}
         <TouchableOpacity
           style={[styles.reseauCard, { borderColor: reseauInfo.color + '30' }]}
           onPress={() => handleNavigate('Reseau')}
@@ -491,7 +427,7 @@ export default function DashboardScreen() {
           <Ionicons name="chevron-forward" size={20} color={Colors.textMuted} />
         </TouchableOpacity>
 
-        {/* ===== STATISTIQUES (filtrées par rôle) ===== */}
+        {/* STATISTIQUES */}
         <View style={styles.statsGrid}>
           {filteredStats.length > 0 && (
             <View style={styles.statsRow}>
@@ -525,7 +461,7 @@ export default function DashboardScreen() {
           )}
         </View>
 
-        {/* ===== ACTIONS RAPIDES ===== */}
+        {/* ACTIONS RAPIDES */}
         <SectionHeader
           title="Actions rapides"
           icon="rocket-outline"
@@ -544,7 +480,7 @@ export default function DashboardScreen() {
           ))}
         </View>
 
-        {/* ===== NOTIFICATIONS RÉCENTES ===== */}
+        {/* NOTIFICATIONS */}
         {notifications.length > 0 && (
           <View style={styles.notifsSection}>
             <SectionHeader
@@ -617,7 +553,6 @@ function ActionCard({ icon, label, onPress, color }) {
 // FONCTIONS UTILITAIRES
 // =========================================================
 
-// Labels des statistiques
 const getStatLabel = (key) => {
   const map = {
     interventions: 'Interventions',
@@ -631,7 +566,6 @@ const getStatLabel = (key) => {
   return map[key] || key;
 };
 
-// Icônes des statistiques
 const getStatIcon = (key) => {
   const map = {
     interventions: 'document-text-outline',
@@ -645,7 +579,6 @@ const getStatIcon = (key) => {
   return map[key] || 'stats-chart-outline';
 };
 
-// Couleurs des statistiques
 const getStatColor = (key) => {
   const map = {
     interventions: Colors.primary,
@@ -659,7 +592,6 @@ const getStatColor = (key) => {
   return map[key] || Colors.textMuted;
 };
 
-// Notifications
 const getNotifIcon = (type) => {
   const map = {
     rapport: 'document-text',

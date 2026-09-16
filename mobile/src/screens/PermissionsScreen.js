@@ -86,6 +86,101 @@ const TYPES_PERMISSION = [
 ];
 
 // =========================================================
+// CONFIGURATION DES RÔLES
+// =========================================================
+
+const ROLES_CONFIG = {
+  admin: {
+    label: 'Administrateur',
+    shortLabel: 'Admin',
+    icon: 'shield-checkmark-outline',
+    color: Colors.danger,
+  },
+  dj: {
+    label: 'DJ',
+    shortLabel: 'DJ',
+    icon: 'musical-notes-outline',
+    color: Colors.accent,
+  },
+  superviseur: {
+    label: 'Superviseur',
+    shortLabel: 'Superviseur',
+    icon: 'briefcase-outline',
+    color: Colors.primary,
+  },
+  technicien: {
+    label: 'Technicien',
+    shortLabel: 'Technicien',
+    icon: 'construct-outline',
+    color: Colors.secondary,
+  },
+};
+
+const getRoleConfig = (role) => {
+  if (!role) {
+    return {
+      label: 'Utilisateur',
+      shortLabel: 'Utilisateur',
+      icon: 'person-outline',
+      color: Colors.textMuted,
+    };
+  }
+  const key = role.toLowerCase();
+  return ROLES_CONFIG[key] || {
+    label: role,
+    shortLabel: role,
+    icon: 'person-outline',
+    color: Colors.textMuted,
+  };
+};
+
+/**
+ * Détermine le rôle d'une permission à partir des champs renvoyés par l'API.
+ * On regarde dans l'ordre : role explicite → présence de superviseur/technicien → user_id
+ */
+const getPermissionRole = (permission) => {
+  // 1) Si l'API renvoie directement le rôle
+  if (permission.role) return permission.role.toLowerCase();
+  if (permission.user_role) return permission.user_role.toLowerCase();
+
+  // 2) Sinon on déduit à partir des champs présents
+  if (permission.superviseur_id || permission.superviseur_nom) return 'superviseur';
+  if (permission.technicien_id || permission.technicien_nom) return 'technicien';
+
+  // 3) Sinon on ne sait pas
+  return null;
+};
+
+/**
+ * Extrait le nom/prénom de la personne concernée par la permission,
+ * peu importe son rôle.
+ */
+const getPermissionUser = (permission) => {
+  const role = getPermissionRole(permission);
+
+  if (role === 'superviseur') {
+    return {
+      role: 'superviseur',
+      prenom: permission.superviseur_prenom || '',
+      nom: permission.superviseur_nom || '',
+    };
+  }
+  if (role === 'technicien') {
+    return {
+      role: 'technicien',
+      prenom: permission.technicien_prenom || '',
+      nom: permission.technicien_nom || '',
+    };
+  }
+  // Admin / DJ ou générique
+  return {
+    role: role || 'utilisateur',
+    prenom: permission.user_prenom || permission.prenom || '',
+    nom: permission.user_nom || permission.nom || '',
+  };
+};
+
+// =========================================================
 // COMPOSANT SÉLECTEUR RECHERCHABLE
 // =========================================================
 
@@ -101,12 +196,16 @@ function SearchableSelector({
   icon,
   getOptionColor,
   disabled,
+  includeAllOption = true,
+  allOptionLabel = 'Tous',
 }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [search, setSearch] = useState('');
 
-  // Option "Tous" en tête de liste
-  const optionsWithAll = [{ label: 'Tous les types', value: null, icon: 'apps-outline', color: Colors.textMuted }, ...options];
+  // Option "Tous" en tête de liste (si activé)
+  const optionsWithAll = includeAllOption
+    ? [{ label: allOptionLabel, value: null, icon: 'apps-outline', color: Colors.textMuted }, ...options]
+    : options;
 
   const filteredOptions = optionsWithAll.filter(opt =>
     opt.label.toLowerCase().includes(search.toLowerCase())
@@ -133,7 +232,7 @@ function SearchableSelector({
   };
 
   const getLabel = () => {
-    if (value === null) return 'Tous les types';
+    if (value === null) return allOptionLabel;
     const found = options.find(o => o.value === value);
     return found?.label || placeholder || 'Sélectionner...';
   };
@@ -152,7 +251,11 @@ function SearchableSelector({
         disabled={disabled}
       >
         <View style={styles.selectorInputContent}>
-          <Ionicons name={getIconName()} size={20} color={value !== undefined && value !== null ? getColor() : Colors.textMuted} />
+          <Ionicons
+            name={getIconName()}
+            size={20}
+            color={value !== undefined && value !== null ? getColor() : Colors.textMuted}
+          />
           <Text style={[
             styles.selectorInputText,
             value !== undefined && value !== null ? styles.selectorInputTextSelected : styles.selectorInputTextPlaceholder,
@@ -255,6 +358,7 @@ export default function PermissionsScreen() {
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
   const [selectedType, setSelectedType] = useState(null);
+  const [selectedRole, setSelectedRole] = useState(null);
   const [selectedStatus, setSelectedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -274,8 +378,9 @@ export default function PermissionsScreen() {
         permissionsAPI.list(),
         permissionsAPI.statistiques().catch(() => ({})),
       ]);
-      setPermissions(data?.data || data || []);
-      setFiltered(data?.data || data || []);
+      const list = data?.data || data || [];
+      setPermissions(list);
+      setFiltered(list);
       setStats(statsData?.statistiques || null);
     } catch (error) {
       console.error('❌ Erreur chargement permissions:', error);
@@ -312,14 +417,34 @@ export default function PermissionsScreen() {
 
     if (search.trim()) {
       const q = search.toLowerCase().trim();
-      result = result.filter(p =>
-        `${p.superviseur_nom || ''} ${p.superviseur_prenom || ''} ${p.technicien_nom || ''} ${p.type_permission || ''}`
-          .toLowerCase().includes(q)
-      );
+      result = result.filter(p => {
+        const userInfo = getPermissionUser(p);
+        const haystack = [
+          p.superviseur_nom,
+          p.superviseur_prenom,
+          p.technicien_nom,
+          p.technicien_prenom,
+          p.user_nom,
+          p.user_prenom,
+          p.nom,
+          p.prenom,
+          p.type_permission,
+          userInfo.nom,
+          userInfo.prenom,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(q);
+      });
     }
 
     if (selectedType !== null && selectedType !== undefined) {
       result = result.filter(p => p.type_permission === selectedType);
+    }
+
+    if (selectedRole !== null && selectedRole !== undefined) {
+      result = result.filter(p => getPermissionRole(p) === selectedRole);
     }
 
     if (selectedStatus !== null) {
@@ -327,7 +452,7 @@ export default function PermissionsScreen() {
     }
 
     setFiltered(result);
-  }, [search, selectedType, selectedStatus, permissions]);
+  }, [search, selectedType, selectedRole, selectedStatus, permissions]);
 
   // =========================================================
   // HANDLERS
@@ -335,10 +460,10 @@ export default function PermissionsScreen() {
 
   // ℹ️ Réaction système : valider/refuser/supprimer une permission ici met à
   // jour son statut côté serveur (`est_valide`). Le Dashboard de la personne
-  // concernée (technicien ou superviseur) relit ses propres permissions à
-  // chaque focus et toutes les 30s ; dès que ce statut change, l'action
-  // rapide correspondante apparaît ou disparaît automatiquement de son
-  // accueil — sans rien avoir à faire de plus ici.
+  // concernée (technicien, superviseur, admin ou DJ) relit ses propres
+  // permissions à chaque focus et toutes les 30s ; dès que ce statut change,
+  // l'action rapide correspondante apparaît ou disparaît automatiquement
+  // de son accueil — sans rien avoir à faire de plus ici.
   const handleValidate = async (permissionId, valide) => {
     Alert.alert(
       valide ? 'Valider la permission' : 'Refuser la permission',
@@ -389,9 +514,26 @@ export default function PermissionsScreen() {
     setSelectedType(typeValue);
   };
 
+  const handleRoleChange = (roleValue) => {
+    setSelectedRole(roleValue);
+  };
+
   const handleStatusFilter = (status) => {
     setSelectedStatus(selectedStatus === status ? null : status);
   };
+
+  const handleResetFilters = () => {
+    setSearch('');
+    setSelectedType(null);
+    setSelectedRole(null);
+    setSelectedStatus(null);
+  };
+
+  const hasActiveFilters =
+    selectedType !== null ||
+    selectedRole !== null ||
+    selectedStatus !== null ||
+    search.trim().length > 0;
 
   const getTypeInfo = (typeValue) => {
     if (typeValue === null) return { label: 'Tous les types', icon: 'apps-outline', color: Colors.textMuted };
@@ -423,6 +565,13 @@ export default function PermissionsScreen() {
     { label: 'Validé', value: 1, color: Colors.success },
   ];
 
+  const roleOptions = [
+    { label: 'Administrateurs', value: 'admin', icon: 'shield-checkmark-outline', color: Colors.danger },
+    { label: 'DJ', value: 'dj', icon: 'musical-notes-outline', color: Colors.accent },
+    { label: 'Superviseurs', value: 'superviseur', icon: 'briefcase-outline', color: Colors.primary },
+    { label: 'Techniciens', value: 'technicien', icon: 'construct-outline', color: Colors.secondary },
+  ];
+
   const statsGlobal = stats?.global || {};
 
   return (
@@ -443,6 +592,9 @@ export default function PermissionsScreen() {
             <Text style={styles.headerTitle}>Permissions</Text>
             <Text style={styles.headerSubtitle}>
               {filtered.length} permission{filtered.length > 1 ? 's' : ''}
+              {hasActiveFilters && permissions.length !== filtered.length && (
+                ` sur ${permissions.length}`
+              )}
             </Text>
           </View>
 
@@ -493,7 +645,7 @@ export default function PermissionsScreen() {
           <SearchBar
             value={search}
             onChangeText={setSearch}
-            placeholder="Rechercher par nom, technicien, type..."
+            placeholder="Rechercher par nom, rôle, type..."
             style={styles.searchBar}
           />
           <TouchableOpacity
@@ -508,6 +660,9 @@ export default function PermissionsScreen() {
               size={20}
               color={showFilters ? Colors.primary : Colors.textWhite}
             />
+            {hasActiveFilters && !showFilters && (
+              <View style={styles.filterBadge} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -521,8 +676,23 @@ export default function PermissionsScreen() {
               options={TYPES_PERMISSION}
               placeholder="Tous les types"
               icon="key-outline"
+              allOptionLabel="Tous les types"
               getOptionColor={(value) => {
                 const found = TYPES_PERMISSION.find(t => t.value === value);
+                return found?.color || Colors.textMuted;
+              }}
+            />
+
+            <SearchableSelector
+              label="Rôle de l'utilisateur"
+              value={selectedRole}
+              onChange={handleRoleChange}
+              options={roleOptions}
+              placeholder="Tous les rôles"
+              icon="people-outline"
+              allOptionLabel="Tous les rôles"
+              getOptionColor={(value) => {
+                const found = roleOptions.find(r => r.value === value);
                 return found?.color || Colors.textMuted;
               }}
             />
@@ -543,6 +713,17 @@ export default function PermissionsScreen() {
                 ))}
               </ScrollView>
             </View>
+
+            {hasActiveFilters && (
+              <TouchableOpacity
+                onPress={handleResetFilters}
+                style={styles.resetFiltersBtn}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="refresh-outline" size={16} color={Colors.danger} />
+                <Text style={styles.resetFiltersText}>Réinitialiser les filtres</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </Animated.View>
@@ -565,7 +746,11 @@ export default function PermissionsScreen() {
         ListEmptyComponent={
           <EmptyState
             title="Aucune permission trouvée"
-            subtitle={search ? 'Aucun résultat pour cette recherche' : 'Aucune permission enregistrée'}
+            subtitle={
+              hasActiveFilters
+                ? 'Aucun résultat pour ces filtres'
+                : 'Aucune permission enregistrée'
+            }
             icon="🔑"
           />
         }
@@ -615,6 +800,12 @@ function PermissionCard({
   const statusLabel = getStatusLabel(permission.est_valide);
   const isEnAttente = permission.est_valide === 0;
 
+  // Détection du rôle et du nom de la personne concernée
+  const role = getPermissionRole(permission);
+  const roleConfig = getRoleConfig(role);
+  const userInfo = getPermissionUser(permission);
+  const fullName = `${userInfo.prenom} ${userInfo.nom}`.trim();
+
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
       <Card style={styles.permissionCard}>
@@ -625,14 +816,21 @@ function PermissionCard({
             </View>
             <View style={styles.typeInfo}>
               <Text style={styles.permissionType}>{typeInfo.label}</Text>
-              <Text style={styles.permissionSubtype}>
-                {permission.superviseur_nom && (
-                  <Text>Superviseur: {permission.superviseur_prenom} {permission.superviseur_nom}</Text>
-                )}
-                {permission.technicien_nom && (
-                  <Text> • Technicien: {permission.technicien_prenom} {permission.technicien_nom}</Text>
-                )}
-              </Text>
+              {fullName ? (
+                <View style={styles.userRow}>
+                  <View style={[styles.roleTag, { backgroundColor: roleConfig.color + '15' }]}>
+                    <Ionicons name={roleConfig.icon} size={10} color={roleConfig.color} />
+                    <Text style={[styles.roleTagText, { color: roleConfig.color }]}>
+                      {roleConfig.shortLabel}
+                    </Text>
+                  </View>
+                  <Text style={styles.permissionSubtype} numberOfLines={1}>
+                    {fullName}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.permissionSubtype}>Utilisateur non spécifié</Text>
+              )}
             </View>
           </View>
 
@@ -660,12 +858,6 @@ function PermissionCard({
               {new Date(permission.created_at).toLocaleDateString('fr-FR')}
             </Text>
           </View>
-          {permission.technicien_nom && (
-            <View style={styles.metaItem}>
-              <Ionicons name="person-outline" size={14} color={Colors.textMuted} />
-              <Text style={styles.metaText}>Technicien concerné</Text>
-            </View>
-          )}
         </View>
 
         {isEnAttente && canManage && (
@@ -812,11 +1004,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     ...Shadows.light,
+    position: 'relative',
   },
   filterToggleActive: {
     backgroundColor: Colors.surface,
     borderWidth: 1.5,
     borderColor: Colors.primary,
+  },
+  filterBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.danger,
   },
 
   // FILTERS
@@ -837,6 +1039,23 @@ const styles = StyleSheet.create({
   },
   filterChip: {
     marginRight: 4,
+  },
+  resetFiltersBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginTop: Spacing.sm,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.danger + '10',
+    borderWidth: 1,
+    borderColor: Colors.danger + '30',
+  },
+  resetFiltersText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.danger,
   },
 
   // LIST
@@ -883,6 +1102,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textSecondary,
     marginTop: 2,
+    flexShrink: 1,
+  },
+  userRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  roleTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  roleTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
   },
 
   validationInfo: {

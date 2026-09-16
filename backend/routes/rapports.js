@@ -11,7 +11,7 @@ const {
     isAdminOrDJ,
     isOwner,
     isSuperviseurOrAdmin,
-    hasPermission,   // <-- AJOUT
+    hasPermission,
     logUserAction
 } = require('../middleware/auth');
 
@@ -56,25 +56,76 @@ const STATUTS_RAPPORT = ['brouillon', 'soumis', 'approuve', 'rejete'];
 const TYPES_INTERVENTION = ['preventive', 'corrective', 'urgente'];
 
 // ========================================================
-// ROUTES SANS PARAMÈTRE :id (doivent être avant /:id)
+// FONCTIONS UTILITAIRES
 // ========================================================
 
+function hasUserIdColumn(db) {
+    try {
+        const cols = db.prepare("PRAGMA table_info(rapports)").all().map(c => c.name);
+        return cols.includes('user_id');
+    } catch (e) {
+        return false;
+    }
+}
+
+function resolveUserTarget(db, userId) {
+    if (!userId) return { user_id: null, technicien_id: null, role: null, exists: false };
+
+    const user = db.prepare('SELECT id, role, nom, prenom FROM utilisateurs WHERE id = ?').get(userId);
+    if (!user) return { user_id: userId, technicien_id: null, role: null, exists: false };
+
+    const role = (user.role || '').toLowerCase();
+
+    if (role === 'technicien') {
+        const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(userId);
+        return {
+            user_id: userId,
+            technicien_id: tech?.id || null,
+            role: 'technicien',
+            exists: true,
+        };
+    }
+
+    return {
+        user_id: userId,
+        technicien_id: null,
+        role,
+        exists: true,
+    };
+}
+
+// ========================================================
 // GET /rapports/recherche
+// ========================================================
+
 router.get('/recherche', authenticate, (req, res) => {
     try {
         const { q, limit = 20 } = req.query;
         if (!q || q.length < 2) return res.status(400).json({ success: false, message: 'Recherche trop courte' });
         const db = getDb();
-        let query = `
-            SELECT r.id, r.titre, r.description, r.statut, r.date_intervention, r.created_at,
-                   t.matricule as technicien_matricule, u.nom as technicien_nom, u.prenom as technicien_prenom,
-                   m.titre as mission_titre
-            FROM rapports r
-            LEFT JOIN techniciens t ON r.technicien_id = t.id
-            LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
-            LEFT JOIN missions m ON r.mission_id = m.id
-            WHERE r.titre LIKE ? OR r.description LIKE ? OR r.adresse LIKE ?
-        `;
+        const hasUser = hasUserIdColumn(db);
+
+        let query = hasUser
+            ? `
+                SELECT r.id, r.titre, r.description, r.statut, r.date_intervention, r.created_at,
+                       u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.role as user_role,
+                       m.titre as mission_titre
+                FROM rapports r
+                LEFT JOIN utilisateurs u_target ON r.user_id = u_target.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                WHERE r.titre LIKE ? OR r.description LIKE ? OR r.adresse LIKE ?
+            `
+            : `
+                SELECT r.id, r.titre, r.description, r.statut, r.date_intervention, r.created_at,
+                       t.matricule as technicien_matricule, u.nom as technicien_nom, u.prenom as technicien_prenom,
+                       m.titre as mission_titre
+                FROM rapports r
+                LEFT JOIN techniciens t ON r.technicien_id = t.id
+                LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                WHERE r.titre LIKE ? OR r.description LIKE ? OR r.adresse LIKE ?
+            `;
+
         const params = [`%${q}%`, `%${q}%`, `%${q}%`];
 
         if (req.userRole === 'technicien') {
@@ -102,7 +153,10 @@ router.get('/recherche', authenticate, (req, res) => {
     }
 });
 
+// ========================================================
 // GET /rapports/statistiques
+// ========================================================
+
 router.get('/statistiques', authenticate, isSuperviseurOrAdmin, (req, res) => {
     try {
         const db = getDb();
@@ -128,16 +182,29 @@ router.get('/statistiques', authenticate, isSuperviseurOrAdmin, (req, res) => {
                 return r && r.jours ? Math.round(r.jours) + ' jours' : 'N/A';
             } catch (e) { return 'N/A'; }
         })();
-        const topTechniciens = safeAll(`
-            SELECT u.nom, u.prenom, COUNT(r.id) as rapports_count,
-                   SUM(CASE WHEN r.statut = 'approuve' THEN 1 ELSE 0 END) as approuves
-            FROM rapports r
-            LEFT JOIN techniciens t ON r.technicien_id = t.id
-            LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
-            WHERE r.technicien_id IS NOT NULL
-            GROUP BY r.technicien_id
-            ORDER BY rapports_count DESC LIMIT 10
-        `);
+
+        const hasUser = hasUserIdColumn(db);
+        const topUtilisateurs = hasUser
+            ? safeAll(`
+                SELECT u.nom, u.prenom, u.role, COUNT(r.id) as rapports_count,
+                       SUM(CASE WHEN r.statut = 'approuve' THEN 1 ELSE 0 END) as approuves
+                FROM rapports r
+                LEFT JOIN utilisateurs u ON r.user_id = u.id
+                WHERE r.user_id IS NOT NULL
+                GROUP BY r.user_id
+                ORDER BY rapports_count DESC LIMIT 10
+            `)
+            : safeAll(`
+                SELECT u.nom, u.prenom, 'technicien' as role, COUNT(r.id) as rapports_count,
+                       SUM(CASE WHEN r.statut = 'approuve' THEN 1 ELSE 0 END) as approuves
+                FROM rapports r
+                LEFT JOIN techniciens t ON r.technicien_id = t.id
+                LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
+                WHERE r.technicien_id IS NOT NULL
+                GROUP BY r.technicien_id
+                ORDER BY rapports_count DESC LIMIT 10
+            `);
+
         const photosStats = safeGet(`
             SELECT COUNT(DISTINCT r.id) as rapports_avec_photos, COUNT(p.id) as total_photos,
                    AVG(p_count) as moyenne_photos
@@ -149,16 +216,12 @@ router.get('/statistiques', authenticate, isSuperviseurOrAdmin, (req, res) => {
             success: true,
             statistiques: {
                 global: {
-                    total,
-                    brouillons,
-                    soumis,
-                    approuves,
-                    rejetes,
+                    total, brouillons, soumis, approuves, rejetes,
                     taux_approbation: total > 0 ? ((approuves / total) * 100).toFixed(1) + '%' : '0%'
                 },
                 par_type_intervention: parType,
                 par_mois: parMois,
-                top_techniciens: topTechniciens,
+                top_utilisateurs: topUtilisateurs,
                 temps_moyen_traitement: tempsMoyen,
                 photos: {
                     total: photosStats.total_photos || 0,
@@ -173,7 +236,10 @@ router.get('/statistiques', authenticate, isSuperviseurOrAdmin, (req, res) => {
     }
 });
 
+// ========================================================
 // GET /rapports/technicien/:id
+// ========================================================
+
 router.get('/technicien/:id', authenticate, (req, res) => {
     try {
         const technicienId = parseInt(req.params.id);
@@ -210,23 +276,36 @@ router.get('/technicien/:id', authenticate, (req, res) => {
     }
 });
 
+// ========================================================
 // GET /rapports/mission/:id
+// ========================================================
+
 router.get('/mission/:id', authenticate, (req, res) => {
     try {
         const missionId = parseInt(req.params.id);
         const { page = 1, limit = 20 } = req.query;
         const db = getDb();
         const offset = (parseInt(page) - 1) * parseInt(limit);
+        const hasUser = hasUserIdColumn(db);
 
-        const rapports = db.prepare(`
-            SELECT r.*, t.matricule as technicien_matricule, u.nom as technicien_nom, u.prenom as technicien_prenom
-            FROM rapports r
-            LEFT JOIN techniciens t ON r.technicien_id = t.id
-            LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
-            WHERE r.mission_id = ?
-            ORDER BY r.created_at DESC
-            LIMIT ? OFFSET ?
-        `).all(missionId, parseInt(limit), offset);
+        const rapports = hasUser
+            ? db.prepare(`
+                SELECT r.*, u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.role as user_role
+                FROM rapports r
+                LEFT JOIN utilisateurs u_target ON r.user_id = u_target.id
+                WHERE r.mission_id = ?
+                ORDER BY r.created_at DESC
+                LIMIT ? OFFSET ?
+            `).all(missionId, parseInt(limit), offset)
+            : db.prepare(`
+                SELECT r.*, t.matricule as technicien_matricule, u.nom as technicien_nom, u.prenom as technicien_prenom
+                FROM rapports r
+                LEFT JOIN techniciens t ON r.technicien_id = t.id
+                LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
+                WHERE r.mission_id = ?
+                ORDER BY r.created_at DESC
+                LIMIT ? OFFSET ?
+            `).all(missionId, parseInt(limit), offset);
 
         const total = db.prepare('SELECT COUNT(*) as count FROM rapports WHERE mission_id = ?').get(missionId);
         return res.json({ success: true, data: rapports, pagination: { page: parseInt(page), limit: parseInt(limit), total: total.count, pages: Math.ceil(total.count / parseInt(limit)) } });
@@ -236,7 +315,10 @@ router.get('/mission/:id', authenticate, (req, res) => {
     }
 });
 
+// ========================================================
 // GET /rapports/statut/:statut
+// ========================================================
+
 router.get('/statut/:statut', authenticate, isSuperviseurOrAdmin, (req, res) => {
     try {
         const { statut } = req.params;
@@ -244,17 +326,28 @@ router.get('/statut/:statut', authenticate, isSuperviseurOrAdmin, (req, res) => 
         const db = getDb();
         const { page = 1, limit = 20 } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
+        const hasUser = hasUserIdColumn(db);
 
-        const rapports = db.prepare(`
-            SELECT r.*, t.matricule as technicien_matricule, u.nom as technicien_nom, u.prenom as technicien_prenom, m.titre as mission_titre
-            FROM rapports r
-            LEFT JOIN techniciens t ON r.technicien_id = t.id
-            LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
-            LEFT JOIN missions m ON r.mission_id = m.id
-            WHERE r.statut = ?
-            ORDER BY r.created_at DESC
-            LIMIT ? OFFSET ?
-        `).all(statut, parseInt(limit), offset);
+        const rapports = hasUser
+            ? db.prepare(`
+                SELECT r.*, u_target.nom as user_nom, u_target.prenom as user_prenom, u_target.role as user_role, m.titre as mission_titre
+                FROM rapports r
+                LEFT JOIN utilisateurs u_target ON r.user_id = u_target.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                WHERE r.statut = ?
+                ORDER BY r.created_at DESC
+                LIMIT ? OFFSET ?
+            `).all(statut, parseInt(limit), offset)
+            : db.prepare(`
+                SELECT r.*, t.matricule as technicien_matricule, u.nom as technicien_nom, u.prenom as technicien_prenom, m.titre as mission_titre
+                FROM rapports r
+                LEFT JOIN techniciens t ON r.technicien_id = t.id
+                LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                WHERE r.statut = ?
+                ORDER BY r.created_at DESC
+                LIMIT ? OFFSET ?
+            `).all(statut, parseInt(limit), offset);
 
         const total = db.prepare('SELECT COUNT(*) as count FROM rapports WHERE statut = ?').get(statut);
         return res.json({ success: true, data: rapports, pagination: { page: parseInt(page), limit: parseInt(limit), total: total.count, pages: Math.ceil(total.count / parseInt(limit)) } });
@@ -265,12 +358,14 @@ router.get('/statut/:statut', authenticate, isSuperviseurOrAdmin, (req, res) => 
 });
 
 // ========================================================
-// GET /rapports - LISTE DES RAPPORTS (tous rôles) – CORRIGÉ
+// GET /rapports - LISTE
 // ========================================================
+
 router.get('/', authenticate, (req, res) => {
     try {
         const db = getDb();
-        const { statut, technicien_id, mission_id, date_debut, date_fin, page = 1, limit = 50 } = req.query;
+        const { statut, technicien_id, user_id, mission_id, date_debut, date_fin, page = 1, limit = 50 } = req.query;
+        const hasUser = hasUserIdColumn(db);
 
         let conditions = [];
         let params = [];
@@ -288,6 +383,10 @@ router.get('/', authenticate, (req, res) => {
 
         if (statut) { conditions.push('r.statut = ?'); params.push(statut); }
         if (technicien_id && req.userRole !== 'technicien') { conditions.push('r.technicien_id = ?'); params.push(parseInt(technicien_id)); }
+        if (user_id && req.userRole !== 'technicien' && hasUser) {
+            conditions.push('r.user_id = ?');
+            params.push(parseInt(user_id));
+        }
         if (mission_id) { conditions.push('r.mission_id = ?'); params.push(parseInt(mission_id)); }
         if (date_debut) { conditions.push('r.date_intervention >= ?'); params.push(date_debut); }
         if (date_fin) { conditions.push('r.date_intervention <= ?'); params.push(date_fin); }
@@ -295,20 +394,48 @@ router.get('/', authenticate, (req, res) => {
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
-        const rapports = db.prepare(`
-            SELECT r.*, t.matricule as technicien_matricule, t.specialite as technicien_specialite,
-                   u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom,
-                   m.titre as mission_titre, m.id as mission_id, m.date_debut as mission_date_debut
-            FROM rapports r
-            LEFT JOIN techniciens t ON r.technicien_id = t.id
-            LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
-            LEFT JOIN missions m ON r.mission_id = m.id
-            ${whereClause}
-            ORDER BY r.created_at DESC
-            LIMIT ? OFFSET ?
-        `).all(...params, parseInt(limit), offset);
+        const query = hasUser
+            ? `
+                SELECT r.*,
+                       u_target.nom as user_nom,
+                       u_target.prenom as user_prenom,
+                       u_target.email as user_email,
+                       u_target.role as user_role,
+                       u_target.nom as technicien_nom,
+                       u_target.prenom as technicien_prenom,
+                       u_target.email as technicien_email,
+                       m.titre as mission_titre,
+                       m.id as mission_id,
+                       m.date_debut as mission_date_debut
+                FROM rapports r
+                LEFT JOIN utilisateurs u_target ON r.user_id = u_target.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                ${whereClause}
+                ORDER BY r.created_at DESC
+                LIMIT ? OFFSET ?
+            `
+            : `
+                SELECT r.*,
+                       t.matricule as technicien_matricule,
+                       t.specialite as technicien_specialite,
+                       u_tech.nom as technicien_nom,
+                       u_tech.prenom as technicien_prenom,
+                       u_tech.email as technicien_email,
+                       u_tech.role as user_role,
+                       m.titre as mission_titre,
+                       m.id as mission_id,
+                       m.date_debut as mission_date_debut
+                FROM rapports r
+                LEFT JOIN techniciens t ON r.technicien_id = t.id
+                LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                ${whereClause}
+                ORDER BY r.created_at DESC
+                LIMIT ? OFFSET ?
+            `;
 
-        // Photos
+        const rapports = db.prepare(query).all(...params, parseInt(limit), offset);
+
         const host = `${req.protocol || 'http'}://${req.get('host') || 'localhost:3000'}`;
         const rapportsWithPhotos = rapports.map(rapport => {
             const photos = db.prepare('SELECT id, nom_fichier, chemin, description, date_prise, created_at FROM photos_rapport WHERE rapport_id = ? ORDER BY created_at DESC').all(rapport.id);
@@ -329,39 +456,57 @@ router.get('/', authenticate, (req, res) => {
 });
 
 // ========================================================
-// GET /rapports/:id - DÉTAILS D'UN RAPPORT
+// GET /rapports/:id - DÉTAILS
 // ========================================================
+
 router.get('/:id', authenticate, (req, res) => {
     try {
         const db = getDb();
         const rapportId = parseInt(req.params.id);
+        const hasUser = hasUserIdColumn(db);
 
-        const rapport = db.prepare(`
-            SELECT r.*, t.matricule as technicien_matricule, t.specialite as technicien_specialite, t.zone_intervention as technicien_zone,
-                   u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom, u_tech.email as technicien_email, u_tech.telephone as technicien_telephone,
-                   m.titre as mission_titre, m.description as mission_description, m.id as mission_id,
-                   m.date_debut as mission_date_debut, m.date_fin_prevue as mission_date_fin_prevue, m.statut as mission_statut,
-                   s.nom as superviseur_nom, s.prenom as superviseur_prenom
-            FROM rapports r
-            LEFT JOIN techniciens t ON r.technicien_id = t.id
-            LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
-            LEFT JOIN missions m ON r.mission_id = m.id
-            LEFT JOIN superviseurs sup ON m.superviseur_id = sup.id
-            LEFT JOIN utilisateurs s ON sup.utilisateur_id = s.id
-            WHERE r.id = ?
-        `).get(rapportId);
+        const query = hasUser
+            ? `
+                SELECT r.*,
+                       u_target.nom as user_nom, u_target.prenom as user_prenom,
+                       u_target.email as user_email, u_target.role as user_role,
+                       u_target.nom as technicien_nom, u_target.prenom as technicien_prenom,
+                       u_target.email as technicien_email,
+                       m.titre as mission_titre, m.description as mission_description, m.id as mission_id,
+                       m.date_debut as mission_date_debut, m.date_fin_prevue as mission_date_fin_prevue, m.statut as mission_statut,
+                       s.nom as superviseur_nom, s.prenom as superviseur_prenom
+                FROM rapports r
+                LEFT JOIN utilisateurs u_target ON r.user_id = u_target.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                LEFT JOIN superviseurs sup ON m.superviseur_id = sup.id
+                LEFT JOIN utilisateurs s ON sup.utilisateur_id = s.id
+                WHERE r.id = ?
+            `
+            : `
+                SELECT r.*,
+                       t.matricule as technicien_matricule, t.specialite as technicien_specialite, t.zone_intervention as technicien_zone,
+                       u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom, u_tech.email as technicien_email, u_tech.telephone as technicien_telephone,
+                       m.titre as mission_titre, m.description as mission_description, m.id as mission_id,
+                       m.date_debut as mission_date_debut, m.date_fin_prevue as mission_date_fin_prevue, m.statut as mission_statut,
+                       s.nom as superviseur_nom, s.prenom as superviseur_prenom
+                FROM rapports r
+                LEFT JOIN techniciens t ON r.technicien_id = t.id
+                LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
+                LEFT JOIN missions m ON r.mission_id = m.id
+                LEFT JOIN superviseurs sup ON m.superviseur_id = sup.id
+                LEFT JOIN utilisateurs s ON sup.utilisateur_id = s.id
+                WHERE r.id = ?
+            `;
+
+        const rapport = db.prepare(query).get(rapportId);
 
         if (!rapport) return res.status(404).json({ success: false, message: 'Rapport non trouvé' });
 
-        // Vérification accès
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (!tech || rapport.technicien_id !== tech.id) return res.status(403).json({ success: false, message: 'Accès refusé' });
-        } else if (req.userRole === 'superviseur') {
-            const sup = db.prepare('SELECT id, zone_responsable FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
-            if (!sup) return res.status(403).json({ success: false, message: 'Accès refusé' });
-            const authorized = db.prepare(`SELECT r.id FROM rapports r LEFT JOIN missions m ON r.mission_id = m.id WHERE r.id = ? AND (r.technicien_id IN (SELECT id FROM techniciens WHERE zone_intervention = ?) OR m.superviseur_id = ?)`).get(rapportId, sup.zone_responsable, sup.id);
-            if (!authorized) return res.status(403).json({ success: false, message: 'Accès refusé' });
+            const isOwner = tech && rapport.technicien_id === tech.id;
+            const isUser = rapport.user_id === req.userId;
+            if (!isOwner && !isUser) return res.status(403).json({ success: false, message: 'Accès refusé' });
         }
 
         const host = `${req.protocol || 'http'}://${req.get('host') || 'localhost:3000'}`;
@@ -385,12 +530,14 @@ router.get('/:id', authenticate, (req, res) => {
 });
 
 // ========================================================
-// POST /rapports - CRÉER UN RAPPORT (avec permission)
+// POST /rapports - CRÉER UN RAPPORT
 // ========================================================
+
 router.post('/', authenticate, hasPermission('creer_rapport'), upload.array('photos', 10), (req, res) => {
     try {
         const {
             technicien_id,
+            user_id,
             mission_id,
             titre,
             description,
@@ -403,6 +550,8 @@ router.post('/', authenticate, hasPermission('creer_rapport'), upload.array('pho
             date_intervention
         } = req.body;
 
+        console.log('📥 [POST /rapports] Body:', { user_id, technicien_id, titre, mission_id });
+
         if (!titre || !description) {
             return res.status(400).json({ success: false, message: 'Titre et description sont requis' });
         }
@@ -412,47 +561,89 @@ router.post('/', authenticate, hasPermission('creer_rapport'), upload.array('pho
         }
 
         const db = getDb();
+        const hasUser = hasUserIdColumn(db);
 
-        let finalTechnicienId = technicien_id;
+        let finalUserId = null;
+        let finalTechnicienId = null;
+
+        if (user_id) {
+            const resolved = resolveUserTarget(db, parseInt(user_id));
+            if (!resolved.exists) {
+                return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+            }
+            finalUserId = resolved.user_id;
+            finalTechnicienId = resolved.technicien_id;
+        } else if (technicien_id) {
+            const tech = db.prepare('SELECT id, utilisateur_id FROM techniciens WHERE id = ?').get(parseInt(technicien_id));
+            if (tech) {
+                finalTechnicienId = tech.id;
+                finalUserId = tech.utilisateur_id;
+            } else {
+                const user = db.prepare('SELECT id FROM utilisateurs WHERE id = ?').get(parseInt(technicien_id));
+                if (user) finalUserId = user.id;
+            }
+        }
+
         if (req.userRole === 'technicien') {
-            const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (!tech) return res.status(404).json({ success: false, message: 'Profil technicien non trouvé' });
-            finalTechnicienId = tech.id;
+            const tech = db.prepare('SELECT id, utilisateur_id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
+            if (tech) {
+                finalTechnicienId = tech.id;
+                finalUserId = tech.utilisateur_id;
+            } else {
+                finalUserId = req.userId;
+            }
         }
 
-        if (!finalTechnicienId) {
-            return res.status(400).json({ success: false, message: 'Veuillez sélectionner un technicien' });
+        if (!finalUserId && !finalTechnicienId) {
+            return res.status(400).json({ success: false, message: 'Veuillez sélectionner un utilisateur' });
         }
-
-        // Vérifier technicien
-        const techCheck = db.prepare('SELECT id FROM techniciens WHERE id = ?').get(finalTechnicienId);
-        if (!techCheck) return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
 
         if (mission_id) {
             const mission = db.prepare('SELECT id FROM missions WHERE id = ?').get(mission_id);
             if (!mission) return res.status(404).json({ success: false, message: 'Mission non trouvée' });
         }
 
-        const result = db.prepare(`
-            INSERT INTO rapports (technicien_id, mission_id, titre, description, solution, statut, type_intervention, duree_intervention, latitude, longitude, adresse, date_intervention)
-            VALUES (?, ?, ?, ?, ?, 'soumis', ?, ?, ?, ?, ?, ?)
-        `).run(
-            finalTechnicienId,
-            mission_id || null,
-            titre.trim(),
-            description.trim(),
-            solution ? solution.trim() : null,
-            type_intervention || null,
-            duree_intervention ? parseInt(duree_intervention) : null,
-            latitude ? parseFloat(latitude) : null,
-            longitude ? parseFloat(longitude) : null,
-            adresse ? adresse.trim() : null,
-            date_intervention || new Date().toISOString().split('T')[0]
-        );
+        let result;
+        if (hasUser) {
+            result = db.prepare(`
+                INSERT INTO rapports (user_id, technicien_id, mission_id, titre, description, solution, statut, type_intervention, duree_intervention, latitude, longitude, adresse, date_intervention)
+                VALUES (?, ?, ?, ?, ?, ?, 'soumis', ?, ?, ?, ?, ?, ?)
+            `).run(
+                finalUserId,
+                finalTechnicienId,
+                mission_id || null,
+                titre.trim(),
+                description.trim(),
+                solution ? solution.trim() : null,
+                type_intervention || null,
+                duree_intervention ? parseInt(duree_intervention) : null,
+                latitude ? parseFloat(latitude) : null,
+                longitude ? parseFloat(longitude) : null,
+                adresse ? adresse.trim() : null,
+                date_intervention || new Date().toISOString().split('T')[0]
+            );
+        } else {
+            const techIdToStore = finalTechnicienId || finalUserId;
+            result = db.prepare(`
+                INSERT INTO rapports (technicien_id, mission_id, titre, description, solution, statut, type_intervention, duree_intervention, latitude, longitude, adresse, date_intervention)
+                VALUES (?, ?, ?, ?, ?, 'soumis', ?, ?, ?, ?, ?, ?)
+            `).run(
+                techIdToStore,
+                mission_id || null,
+                titre.trim(),
+                description.trim(),
+                solution ? solution.trim() : null,
+                type_intervention || null,
+                duree_intervention ? parseInt(duree_intervention) : null,
+                latitude ? parseFloat(latitude) : null,
+                longitude ? parseFloat(longitude) : null,
+                adresse ? adresse.trim() : null,
+                date_intervention || new Date().toISOString().split('T')[0]
+            );
+        }
 
         const rapportId = result.lastInsertRowid;
 
-        // Photos
         if (req.files && req.files.length > 0) {
             const insertPhoto = db.prepare('INSERT INTO photos_rapport (rapport_id, nom_fichier, chemin, description) VALUES (?, ?, ?, ?)');
             req.files.forEach((file, index) => {
@@ -461,24 +652,37 @@ router.post('/', authenticate, hasPermission('creer_rapport'), upload.array('pho
             });
         }
 
-        // Notifications
         const superviseurs = db.prepare('SELECT utilisateur_id FROM superviseurs').all();
         const insertNotif = db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'rapport', '📄 Nouveau rapport', ?, ?)`);
         superviseurs.forEach(sup => {
             if (sup.utilisateur_id) insertNotif.run(sup.utilisateur_id, `Rapport "${titre}" soumis`, JSON.stringify({ rapportId, titre }));
         });
 
-        logUserAction(req, 'CREATION_RAPPORT', { table: 'rapports', recordId: rapportId, titre, mission_id });
-        return res.status(201).json({ success: true, message: 'Rapport créé', id: rapportId, photos_uploaded: req.files ? req.files.length : 0 });
+        logUserAction(req, 'CREATION_RAPPORT', { table: 'rapports', recordId: rapportId, titre, mission_id, user_id: finalUserId });
+
+        console.log('✅ [POST /rapports] Créé id:', rapportId);
+
+        return res.status(201).json({
+            success: true,
+            message: 'Rapport créé',
+            id: rapportId,
+            photos_uploaded: req.files ? req.files.length : 0
+        });
     } catch (error) {
         console.error('❌ Erreur création rapport:', error);
-        return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
+        console.error('Stack:', error.stack);
+        return res.status(500).json({
+            success: false,
+            message: 'Erreur interne du serveur',
+            ...(process.env.NODE_ENV !== 'production' && { error: error.message })
+        });
     }
 });
 
 // ========================================================
-// PUT /rapports/:id - MODIFIER (avec permission)
+// PUT /rapports/:id - MODIFIER
 // ========================================================
+
 router.put('/:id', authenticate, hasPermission('modifier_rapport'), upload.array('photos', 10), (req, res) => {
     try {
         const rapportId = parseInt(req.params.id);
@@ -487,17 +691,16 @@ router.put('/:id', authenticate, hasPermission('modifier_rapport'), upload.array
 
         const rapport = db.prepare('SELECT * FROM rapports WHERE id = ?').get(rapportId);
         if (!rapport) return res.status(404).json({ success: false, message: 'Rapport non trouvé' });
-        if (rapport.statut === 'approuve' || rapport.statut === 'rejete') return res.status(400).json({ success: false, message: `Impossible de modifier un rapport ${rapport.statut}` });
+        if (rapport.statut === 'approuve' || rapport.statut === 'rejete') {
+            return res.status(400).json({ success: false, message: `Impossible de modifier un rapport ${rapport.statut}` });
+        }
 
-        // Vérification propriétaire ou superviseur/admin
+        // Vérification propriétaire
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (!tech || rapport.technicien_id !== tech.id) return res.status(403).json({ success: false, message: 'Accès refusé' });
-        } else if (req.userRole === 'superviseur') {
-            const sup = db.prepare('SELECT id, zone_responsable FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
-            if (!sup) return res.status(403).json({ success: false, message: 'Accès refusé' });
-            const authorized = db.prepare(`SELECT r.id FROM rapports r LEFT JOIN missions m ON r.mission_id = m.id WHERE r.id = ? AND (r.technicien_id IN (SELECT id FROM techniciens WHERE zone_intervention = ?) OR m.superviseur_id = ?)`).get(rapportId, sup.zone_responsable, sup.id);
-            if (!authorized) return res.status(403).json({ success: false, message: 'Accès refusé' });
+            const isOwner = tech && rapport.technicien_id === tech.id;
+            const isUser = rapport.user_id === req.userId;
+            if (!isOwner && !isUser) return res.status(403).json({ success: false, message: 'Accès refusé' });
         }
 
         db.prepare(`
@@ -530,30 +733,28 @@ router.put('/:id', authenticate, hasPermission('modifier_rapport'), upload.array
 });
 
 // ========================================================
-// DELETE /rapports/:id (admin ou propriétaire) – avec permission
+// DELETE /rapports/:id
 // ========================================================
+
 router.delete('/:id', authenticate, hasPermission('supprimer_rapport'), (req, res) => {
     try {
         const rapportId = parseInt(req.params.id);
         const db = getDb();
         const rapport = db.prepare('SELECT * FROM rapports WHERE id = ?').get(rapportId);
         if (!rapport) return res.status(404).json({ success: false, message: 'Rapport non trouvé' });
-        if (rapport.statut === 'approuve') return res.status(400).json({ success: false, message: 'Impossible de supprimer un rapport approuvé' });
+        if (rapport.statut === 'approuve') {
+            return res.status(400).json({ success: false, message: 'Impossible de supprimer un rapport approuvé' });
+        }
 
-        // Vérification
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (!tech || rapport.technicien_id !== tech.id) return res.status(403).json({ success: false, message: 'Accès refusé' });
-        } else if (req.userRole === 'superviseur') {
-            const sup = db.prepare('SELECT id, zone_responsable FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
-            if (!sup) return res.status(403).json({ success: false, message: 'Accès refusé' });
-            const authorized = db.prepare(`SELECT r.id FROM rapports r LEFT JOIN missions m ON r.mission_id = m.id WHERE r.id = ? AND (r.technicien_id IN (SELECT id FROM techniciens WHERE zone_intervention = ?) OR m.superviseur_id = ?)`).get(rapportId, sup.zone_responsable, sup.id);
-            if (!authorized) return res.status(403).json({ success: false, message: 'Accès refusé' });
-        } else if (!['admin', 'dj'].includes(req.userRole)) {
+            const isOwner = tech && rapport.technicien_id === tech.id;
+            const isUser = rapport.user_id === req.userId;
+            if (!isOwner && !isUser) return res.status(403).json({ success: false, message: 'Accès refusé' });
+        } else if (!['admin', 'dj', 'superviseur'].includes(req.userRole)) {
             return res.status(403).json({ success: false, message: 'Accès refusé' });
         }
 
-        // Supprimer photos physiquement
         const photos = db.prepare('SELECT chemin FROM photos_rapport WHERE rapport_id = ?').all(rapportId);
         photos.forEach(p => {
             const filePath = path.join(uploadDir, p.chemin);
@@ -570,30 +771,39 @@ router.delete('/:id', authenticate, hasPermission('supprimer_rapport'), (req, re
 });
 
 // ========================================================
-// PATCH /rapports/:id/statut – (superviseur/admin/DJ) – pas de permission car rôle
+// PATCH /rapports/:id/statut
 // ========================================================
+
 router.patch('/:id/statut', authenticate, isSuperviseurOrAdmin, (req, res) => {
     try {
         const rapportId = parseInt(req.params.id);
         const { statut } = req.body;
-        if (!statut || !STATUTS_RAPPORT.includes(statut)) return res.status(400).json({ success: false, message: 'Statut invalide' });
+        if (!statut || !STATUTS_RAPPORT.includes(statut)) {
+            return res.status(400).json({ success: false, message: 'Statut invalide' });
+        }
         const db = getDb();
         const rapport = db.prepare('SELECT * FROM rapports WHERE id = ?').get(rapportId);
         if (!rapport) return res.status(404).json({ success: false, message: 'Rapport non trouvé' });
+
         db.prepare('UPDATE rapports SET statut = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(statut, rapportId);
 
-        // Notification au technicien
-        const tech = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(rapport.technicien_id);
-        if (tech) {
-            const messages = {
-                'approuve': '✅ Votre rapport a été approuvé',
-                'rejete': '❌ Votre rapport a été rejeté',
-                'soumis': '📤 Votre rapport a été soumis',
-                'brouillon': '📝 Votre rapport est en brouillon'
-            };
-            db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'rapport', '📄 Mise à jour rapport', ?, ?)`)
-                .run(tech.utilisateur_id, `${messages[statut] || 'Statut modifié'}: ${rapport.titre}`, JSON.stringify({ rapportId, statut, titre: rapport.titre }));
-        }
+        try {
+            let targetUserId = rapport.user_id;
+            if (!targetUserId && rapport.technicien_id) {
+                const tech = db.prepare('SELECT utilisateur_id FROM techniciens WHERE id = ?').get(rapport.technicien_id);
+                if (tech) targetUserId = tech.utilisateur_id;
+            }
+            if (targetUserId) {
+                const messages = {
+                    'approuve': '✅ Votre rapport a été approuvé',
+                    'rejete': '❌ Votre rapport a été rejeté',
+                    'soumis': '📤 Votre rapport a été soumis',
+                    'brouillon': '📝 Votre rapport est en brouillon'
+                };
+                db.prepare(`INSERT INTO notifications (utilisateur_id, type, titre, message, donnees) VALUES (?, 'rapport', '📄 Mise à jour rapport', ?, ?)`)
+                    .run(targetUserId, `${messages[statut] || 'Statut modifié'}: ${rapport.titre}`, JSON.stringify({ rapportId, statut, titre: rapport.titre }));
+            }
+        } catch (e) { console.warn('⚠️ Notification échouée:', e.message); }
 
         logUserAction(req, 'CHANGEMENT_STATUT_RAPPORT', { table: 'rapports', recordId: rapportId, statut });
         return res.json({ success: true, message: `Statut mis à jour : ${statut}` });
@@ -604,20 +814,24 @@ router.patch('/:id/statut', authenticate, isSuperviseurOrAdmin, (req, res) => {
 });
 
 // ========================================================
-// POST /rapports/:id/photos – Ajouter des photos (avec permission)
+// POST /rapports/:id/photos
 // ========================================================
+
 router.post('/:id/photos', authenticate, hasPermission('modifier_rapport'), upload.array('photos', 10), (req, res) => {
     try {
         const rapportId = parseInt(req.params.id);
-        if (!req.files || req.files.length === 0) return res.status(400).json({ success: false, message: 'Aucune photo' });
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, message: 'Aucune photo' });
+        }
         const db = getDb();
         const rapport = db.prepare('SELECT * FROM rapports WHERE id = ?').get(rapportId);
         if (!rapport) return res.status(404).json({ success: false, message: 'Rapport non trouvé' });
 
-        // Vérifier que l'utilisateur est le technicien propriétaire
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (!tech || rapport.technicien_id !== tech.id) return res.status(403).json({ success: false, message: 'Accès refusé' });
+            const isOwner = tech && rapport.technicien_id === tech.id;
+            const isUser = rapport.user_id === req.userId;
+            if (!isOwner && !isUser) return res.status(403).json({ success: false, message: 'Accès refusé' });
         }
 
         const insertPhoto = db.prepare('INSERT INTO photos_rapport (rapport_id, nom_fichier, chemin, description) VALUES (?, ?, ?, ?)');
@@ -635,8 +849,9 @@ router.post('/:id/photos', authenticate, hasPermission('modifier_rapport'), uplo
 });
 
 // ========================================================
-// DELETE /rapports/:id/photos/:photoId – Supprimer une photo (avec permission)
+// DELETE /rapports/:id/photos/:photoId
 // ========================================================
+
 router.delete('/:id/photos/:photoId', authenticate, hasPermission('modifier_rapport'), (req, res) => {
     try {
         const rapportId = parseInt(req.params.id);
@@ -645,10 +860,11 @@ router.delete('/:id/photos/:photoId', authenticate, hasPermission('modifier_rapp
         const rapport = db.prepare('SELECT * FROM rapports WHERE id = ?').get(rapportId);
         if (!rapport) return res.status(404).json({ success: false, message: 'Rapport non trouvé' });
 
-        // Vérifier propriétaire
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (!tech || rapport.technicien_id !== tech.id) return res.status(403).json({ success: false, message: 'Accès refusé' });
+            const isOwner = tech && rapport.technicien_id === tech.id;
+            const isUser = rapport.user_id === req.userId;
+            if (!isOwner && !isUser) return res.status(403).json({ success: false, message: 'Accès refusé' });
         }
 
         const photo = db.prepare('SELECT * FROM photos_rapport WHERE id = ? AND rapport_id = ?').get(photoId, rapportId);

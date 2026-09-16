@@ -6,7 +6,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { authAPI, api } from '../services/api'; // ✅ Import de l'API générale
+import { authAPI, api } from '../services/api';
 
 // =========================================================
 // CONSTANTES
@@ -319,16 +319,8 @@ export function AuthProvider({ children }) {
 
   const hasPermission = useCallback((permission) => {
     if (!user) return false;
-    // Les administrateurs ont tous les droits
     if (user.role === ROLES.ADMIN) return true;
-    // Les DJ ont tous les droits (optionnel, selon votre politique)
-    // On peut les laisser tout voir ou les restreindre selon les permissions.
-    // Dans notre cas, on considère que DJ a toutes les permissions.
     if (user.role === ROLES.DJ) return true;
-    // Pour les superviseurs, ils ont des droits étendus (on peut soit les
-    // laisser tout voir, soit vérifier les permissions si on en définit pour eux)
-    // Ici, on laisse les superviseurs avoir toutes les permissions (puisqu'ils
-    // sont déjà limités par les middlewares de rôle).
     if (user.role === ROLES.SUPERVISEUR) return true;
     // Pour les techniciens, on vérifie la permission dans la liste chargée
     return permissions.includes(permission);
