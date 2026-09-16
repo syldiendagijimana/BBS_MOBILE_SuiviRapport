@@ -364,8 +364,7 @@ Avant d'installer le projet, il est nécessaire d'avoir :
 
 # 1. Installation du Backend
 
-Ouvrir un terminal dans le dossier du projet :
-
+Ouvrir un terminal en tant que Administrateur dans le dossier du projet :
 ```bash
 cd BBS_SuiviRapport/backend
 ```
@@ -379,7 +378,7 @@ npm install
 Démarrer le serveur :
 
 ```bash
-npm start
+node server.js
 ```
 
 Le serveur démarre normalement sur :
@@ -413,7 +412,7 @@ npm install
 Puis lancer l'application Android :
 
 ```bash
-npx react-native run-android
+& "C:\Program Files\nodejs\npx.cmd" react-native run-android
 ```
 
 ---
