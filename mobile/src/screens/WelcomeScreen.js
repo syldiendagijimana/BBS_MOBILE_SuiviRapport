@@ -101,14 +101,14 @@ export default function WelcomeScreen({ navigation, onFinish }) {
 
           {/* Titres */}
           <Text style={styles.title}>Bienvenue</Text>
-          <Text style={styles.subtitle}>Gestion des rapports sur terrain</Text>
+          <Text style={styles.subtitle}>Gestion des activités sur le terrain</Text>
 
           {/* Séparateur élégant */}
           <View style={styles.divider} />
 
           {/* Description */}
           <Text style={styles.description}>
-            Simplifiez vos interventions et suivez vos rapports en temps réel
+            Simplifiez vos interventions et suivez vos activités en temps réel
           </Text>
 
           {/* Bouton principal */}
@@ -139,7 +139,7 @@ export default function WelcomeScreen({ navigation, onFinish }) {
         {/* Footer */}
         <View style={styles.footer}>
           <View style={styles.footerLine} />
-          <Text style={styles.footerText}>© 2024 - Tous droits réservés</Text>
+          <Text style={styles.footerText}>© 2026 - Tous droits réservés</Text>
         </View>
       </SafeAreaView>
     </View>

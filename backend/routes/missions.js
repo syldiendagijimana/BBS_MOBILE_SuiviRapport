@@ -1,3 +1,9 @@
+// ========================================================
+// backend/routes/missions.js
+// Gestion des missions
+// ✨ Validation : date_fin_prevue >= date_debut
+// ========================================================
+
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/database');
@@ -27,7 +33,7 @@ const STATUTS = ['planifiee', 'en_cours', 'terminee', 'annulee'];
  */
 function hasUserIdColumn(db) {
     try {
-        const cols = db.prepare("PRAGMA table_info(missions)").all().map(c => c.name);
+        const cols = db.prepare('PRAGMA table_info(missions)').all().map((c) => c.name);
         return cols.includes('user_id');
     } catch (e) {
         return false;
@@ -81,6 +87,48 @@ function resolveUserTarget(db, userId) {
     };
 }
 
+/**
+ * 🎯 Valide que la date de fin est >= à la date de début.
+ * Retourne { ok: boolean, message: string }
+ *
+ * @param {string|null} dateDebutRaw
+ * @param {string|null} dateFinRaw
+ * @param {object} options
+ *   - allowNullFin: true si la date de fin peut être absente (création sans fin prévue)
+ */
+function validateDates(dateDebutRaw, dateFinRaw, { allowNullFin = false } = {}) {
+    // Date de début obligatoire
+    if (!dateDebutRaw) {
+        return { ok: false, message: 'La date de début est requise' };
+    }
+
+    const debut = new Date(dateDebutRaw);
+    if (isNaN(debut.getTime())) {
+        return { ok: false, message: 'La date de début est invalide' };
+    }
+
+    // Date de fin facultative (selon contexte)
+    if (!dateFinRaw || dateFinRaw === '') {
+        if (allowNullFin) return { ok: true, message: '' };
+        return { ok: false, message: 'La date de fin prévue est requise' };
+    }
+
+    const fin = new Date(dateFinRaw);
+    if (isNaN(fin.getTime())) {
+        return { ok: false, message: 'La date de fin prévue est invalide' };
+    }
+
+    // Comparaison sur la date/heure complète (aligné sur le mobile)
+    if (fin.getTime() < debut.getTime()) {
+        return {
+            ok: false,
+            message: 'La date de fin prévue doit être égale ou postérieure à la date de début',
+        };
+    }
+
+    return { ok: true, message: '' };
+}
+
 // ========================================================
 // ROUTES SANS PARAMÈTRE :id (DOIVENT ÊTRE AVANT /:id)
 // ========================================================
@@ -89,7 +137,12 @@ function resolveUserTarget(db, userId) {
 router.get('/recherche', authenticate, isSuperviseurOrAdmin, (req, res) => {
     try {
         const { q, limit = 20 } = req.query;
-        if (!q || q.length < 2) return res.status(400).json({ success: false, message: 'Le terme de recherche doit contenir au moins 2 caractères' });
+        if (!q || q.length < 2) {
+            return res.status(400).json({
+                success: false,
+                message: 'Le terme de recherche doit contenir au moins 2 caractères',
+            });
+        }
 
         const db = getDb();
         const hasUser = hasUserIdColumn(db);
@@ -131,7 +184,6 @@ router.get('/recherche', authenticate, isSuperviseurOrAdmin, (req, res) => {
         const missions = db.prepare(query).all(`%${q}%`, `%${q}%`, `%${q}%`, parseInt(limit));
 
         return res.json({ success: true, count: missions.length, data: missions });
-
     } catch (error) {
         console.error('❌ Erreur de recherche des missions:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -143,12 +195,21 @@ router.get('/statistiques', authenticate, hasPermission('voir_statistiques'), is
     try {
         const db = getDb();
         const safeGet = (query, params = []) => {
-            try { const result = db.prepare(query).get(...params); return result ? (result.count || 0) : 0; }
-            catch (e) { console.warn('⚠️ Statistique échouée:', e.message); return 0; }
+            try {
+                const result = db.prepare(query).get(...params);
+                return result ? result.count || 0 : 0;
+            } catch (e) {
+                console.warn('⚠️ Statistique échouée:', e.message);
+                return 0;
+            }
         };
         const safeAll = (query, params = []) => {
-            try { return db.prepare(query).all(...params); }
-            catch (e) { console.warn('⚠️ Statistique échouée:', e.message); return []; }
+            try {
+                return db.prepare(query).all(...params);
+            } catch (e) {
+                console.warn('⚠️ Statistique échouée:', e.message);
+                return [];
+            }
         };
 
         const total = safeGet('SELECT COUNT(*) as count FROM missions');
@@ -158,14 +219,30 @@ router.get('/statistiques', authenticate, hasPermission('voir_statistiques'), is
         const annulees = safeGet('SELECT COUNT(*) as count FROM missions WHERE statut = ?', ['annulee']);
 
         const parPriorite = safeAll('SELECT priorite, COUNT(*) as count FROM missions GROUP BY priorite');
-        const parType = safeAll('SELECT type_mission, COUNT(*) as count FROM missions WHERE type_mission IS NOT NULL GROUP BY type_mission');
-        const parMois = safeAll(`SELECT strftime('%Y-%m', created_at) as mois, COUNT(*) as count FROM missions WHERE created_at >= date('now', '-12 months') GROUP BY strftime('%Y-%m', created_at) ORDER BY mois DESC`);
+        const parType = safeAll(
+            'SELECT type_mission, COUNT(*) as count FROM missions WHERE type_mission IS NOT NULL GROUP BY type_mission'
+        );
+        const parMois = safeAll(`
+            SELECT strftime('%Y-%m', created_at) as mois, COUNT(*) as count
+            FROM missions
+            WHERE created_at >= date('now', '-12 months')
+            GROUP BY strftime('%Y-%m', created_at)
+            ORDER BY mois DESC
+        `);
 
         const tempsMoyen = (() => {
             try {
-                const r = db.prepare("SELECT AVG(julianday(date_fin_reelle) - julianday(date_debut)) as jours FROM missions WHERE statut = 'terminee' AND date_fin_reelle IS NOT NULL").get();
+                const r = db
+                    .prepare(`
+                        SELECT AVG(julianday(date_fin_reelle) - julianday(date_debut)) as jours
+                        FROM missions
+                        WHERE statut = 'terminee' AND date_fin_reelle IS NOT NULL
+                    `)
+                    .get();
                 return r && r.jours ? Math.round(r.jours) + ' jours' : 'N/A';
-            } catch (e) { return 'N/A'; }
+            } catch (e) {
+                return 'N/A';
+            }
         })();
 
         const hasUser = hasUserIdColumn(db);
@@ -196,18 +273,21 @@ router.get('/statistiques', authenticate, hasPermission('voir_statistiques'), is
             success: true,
             statistiques: {
                 global: {
-                    total, planifiees, en_cours: enCours, terminees, annulees,
-                    taux_realisation: total > 0 ? ((terminees / total) * 100).toFixed(1) + '%' : '0%'
+                    total,
+                    planifiees,
+                    en_cours: enCours,
+                    terminees,
+                    annulees,
+                    taux_realisation: total > 0 ? ((terminees / total) * 100).toFixed(1) + '%' : '0%',
                 },
                 par_priorite: parPriorite,
                 par_type: parType,
                 par_mois: parMois,
                 temps_moyen_realisation: tempsMoyen,
                 top_utilisateurs: topUtilisateurs,
-                top_techniciens: topUtilisateurs // rétrocompatibilité
-            }
+                top_techniciens: topUtilisateurs, // rétrocompatibilité
+            },
         });
-
     } catch (error) {
         console.error('❌ Erreur de récupération des statistiques:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -224,8 +304,14 @@ router.get('/planification', authenticate, isSuperviseurOrAdmin, (req, res) => {
         let conditions = ["statut IN ('planifiee', 'en_cours')"];
         let params = [];
 
-        if (date_debut) { conditions.push('date_debut >= ?'); params.push(date_debut); }
-        if (date_fin) { conditions.push('date_fin_prevue <= ?'); params.push(date_fin); }
+        if (date_debut) {
+            conditions.push('date_debut >= ?');
+            params.push(date_debut);
+        }
+        if (date_fin) {
+            conditions.push('date_fin_prevue <= ?');
+            params.push(date_fin);
+        }
 
         const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
@@ -262,15 +348,15 @@ router.get('/planification', authenticate, isSuperviseurOrAdmin, (req, res) => {
         const stats = {
             total: missions.length,
             par_priorite: {
-                critique: missions.filter(m => m.priorite === 'critique').length,
-                haute: missions.filter(m => m.priorite === 'haute').length,
-                moyenne: missions.filter(m => m.priorite === 'moyenne').length,
-                basse: missions.filter(m => m.priorite === 'basse').length
+                critique: missions.filter((m) => m.priorite === 'critique').length,
+                haute: missions.filter((m) => m.priorite === 'haute').length,
+                moyenne: missions.filter((m) => m.priorite === 'moyenne').length,
+                basse: missions.filter((m) => m.priorite === 'basse').length,
             },
-            par_technicien: {}
+            par_technicien: {},
         };
 
-        missions.forEach(m => {
+        missions.forEach((m) => {
             if (m.technicien_nom) {
                 const key = `${m.technicien_prenom} ${m.technicien_nom}`;
                 stats.par_technicien[key] = (stats.par_technicien[key] || 0) + 1;
@@ -278,7 +364,6 @@ router.get('/planification', authenticate, isSuperviseurOrAdmin, (req, res) => {
         });
 
         return res.json({ success: true, statistiques: stats, data: missions });
-
     } catch (error) {
         console.error('❌ Erreur de récupération de la planification:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -290,7 +375,10 @@ router.get('/statut/:statut', authenticate, isSuperviseurOrAdmin, (req, res) => 
     try {
         const { statut } = req.params;
         if (!STATUTS.includes(statut)) {
-            return res.status(400).json({ success: false, message: `Statut invalide. Statuts acceptés: ${STATUTS.join(', ')}` });
+            return res.status(400).json({
+                success: false,
+                message: `Statut invalide. Statuts acceptés: ${STATUTS.join(', ')}`,
+            });
         }
 
         const db = getDb();
@@ -335,11 +423,12 @@ router.get('/statut/:statut', authenticate, isSuperviseurOrAdmin, (req, res) => 
             success: true,
             data: missions,
             pagination: {
-                page: parseInt(page), limit: parseInt(limit),
-                total: total.count, pages: Math.ceil(total.count / parseInt(limit))
-            }
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: total.count,
+                pages: Math.ceil(total.count / parseInt(limit)),
+            },
         });
-
     } catch (error) {
         console.error('❌ Erreur de récupération des missions par statut:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -354,29 +443,39 @@ router.get('/technicien/:id', authenticate, (req, res) => {
 
         const db = getDb();
         const technicien = db.prepare('SELECT id, utilisateur_id FROM techniciens WHERE id = ?').get(technicienId);
-        if (!technicien) return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+        if (!technicien) {
+            return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+        }
 
         if (req.userRole === 'technicien' && technicien.utilisateur_id !== req.userId) {
-            return res.status(403).json({ success: false, message: 'Accès refusé - Vous ne pouvez voir que vos propres missions' });
+            return res.status(403).json({
+                success: false,
+                message: 'Accès refusé - Vous ne pouvez voir que vos propres missions',
+            });
         }
 
         let conditions = ['technicien_id = ?'];
         let params = [technicienId];
-        if (statut) { conditions.push('statut = ?'); params.push(statut); }
+        if (statut) {
+            conditions.push('statut = ?');
+            params.push(statut);
+        }
 
         const whereClause = `WHERE ${conditions.join(' AND ')}`;
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
-        const missions = db.prepare(`
-            SELECT m.*, s.zone_responsable,
-                   u_sup.nom as superviseur_nom, u_sup.prenom as superviseur_prenom
-            FROM missions m
-            LEFT JOIN superviseurs s ON m.superviseur_id = s.id
-            LEFT JOIN utilisateurs u_sup ON s.utilisateur_id = u_sup.id
-            ${whereClause}
-            ORDER BY m.priorite DESC, m.date_debut ASC
-            LIMIT ? OFFSET ?
-        `).all(...params, parseInt(limit), offset);
+        const missions = db
+            .prepare(`
+                SELECT m.*, s.zone_responsable,
+                       u_sup.nom as superviseur_nom, u_sup.prenom as superviseur_prenom
+                FROM missions m
+                LEFT JOIN superviseurs s ON m.superviseur_id = s.id
+                LEFT JOIN utilisateurs u_sup ON s.utilisateur_id = u_sup.id
+                ${whereClause}
+                ORDER BY m.priorite DESC, m.date_debut ASC
+                LIMIT ? OFFSET ?
+            `)
+            .all(...params, parseInt(limit), offset);
 
         const total = db.prepare(`SELECT COUNT(*) as count FROM missions ${whereClause}`).get(...params);
 
@@ -384,11 +483,12 @@ router.get('/technicien/:id', authenticate, (req, res) => {
             success: true,
             data: missions,
             pagination: {
-                page: parseInt(page), limit: parseInt(limit),
-                total: total.count, pages: Math.ceil(total.count / parseInt(limit))
-            }
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: total.count,
+                pages: Math.ceil(total.count / parseInt(limit)),
+            },
         });
-
     } catch (error) {
         console.error('❌ Erreur de récupération des missions du technicien:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -403,7 +503,9 @@ router.get('/superviseur/:id', authenticate, isSuperviseurOrAdmin, (req, res) =>
 
         const db = getDb();
         const superviseur = db.prepare('SELECT id, utilisateur_id FROM superviseurs WHERE id = ?').get(superviseurId);
-        if (!superviseur) return res.status(404).json({ success: false, message: 'Superviseur non trouvé' });
+        if (!superviseur) {
+            return res.status(404).json({ success: false, message: 'Superviseur non trouvé' });
+        }
 
         if (req.userRole !== 'admin' && superviseur.utilisateur_id !== req.userId) {
             return res.status(403).json({ success: false, message: 'Accès refusé' });
@@ -411,21 +513,26 @@ router.get('/superviseur/:id', authenticate, isSuperviseurOrAdmin, (req, res) =>
 
         let conditions = ['superviseur_id = ?'];
         let params = [superviseurId];
-        if (statut) { conditions.push('statut = ?'); params.push(statut); }
+        if (statut) {
+            conditions.push('statut = ?');
+            params.push(statut);
+        }
 
         const whereClause = `WHERE ${conditions.join(' AND ')}`;
         const offset = (parseInt(page) - 1) * parseInt(limit);
 
-        const missions = db.prepare(`
-            SELECT m.*, t.matricule as technicien_matricule,
-                   u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom
-            FROM missions m
-            LEFT JOIN techniciens t ON m.technicien_id = t.id
-            LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
-            ${whereClause}
-            ORDER BY m.priorite DESC, m.date_debut ASC
-            LIMIT ? OFFSET ?
-        `).all(...params, parseInt(limit), offset);
+        const missions = db
+            .prepare(`
+                SELECT m.*, t.matricule as technicien_matricule,
+                       u_tech.nom as technicien_nom, u_tech.prenom as technicien_prenom
+                FROM missions m
+                LEFT JOIN techniciens t ON m.technicien_id = t.id
+                LEFT JOIN utilisateurs u_tech ON t.utilisateur_id = u_tech.id
+                ${whereClause}
+                ORDER BY m.priorite DESC, m.date_debut ASC
+                LIMIT ? OFFSET ?
+            `)
+            .all(...params, parseInt(limit), offset);
 
         const total = db.prepare(`SELECT COUNT(*) as count FROM missions ${whereClause}`).get(...params);
 
@@ -433,11 +540,12 @@ router.get('/superviseur/:id', authenticate, isSuperviseurOrAdmin, (req, res) =>
             success: true,
             data: missions,
             pagination: {
-                page: parseInt(page), limit: parseInt(limit),
-                total: total.count, pages: Math.ceil(total.count / parseInt(limit))
-            }
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: total.count,
+                pages: Math.ceil(total.count / parseInt(limit)),
+            },
         });
-
     } catch (error) {
         console.error('❌ Erreur de récupération des missions du superviseur:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -445,34 +553,68 @@ router.get('/superviseur/:id', authenticate, isSuperviseurOrAdmin, (req, res) =>
 });
 
 // ========================================================
-// GET /missions - LISTE DES MISSIONS
+// GET /missions — LISTE DES MISSIONS
 // ========================================================
 router.get('/', authenticate, (req, res) => {
     try {
         const db = getDb();
         const {
-            statut, priorite, technicien_id, superviseur_id, user_id,
-            date_debut, date_fin, page = 1, limit = 50
+            statut,
+            priorite,
+            technicien_id,
+            superviseur_id,
+            user_id,
+            date_debut,
+            date_fin,
+            page = 1,
+            limit = 50,
         } = req.query;
 
         const hasUser = hasUserIdColumn(db);
         let conditions = [];
         let params = [];
 
-        if (statut) { conditions.push('m.statut = ?'); params.push(statut); }
-        if (priorite) { conditions.push('m.priorite = ?'); params.push(priorite); }
-        if (technicien_id) { conditions.push('m.technicien_id = ?'); params.push(parseInt(technicien_id)); }
-        if (superviseur_id) { conditions.push('m.superviseur_id = ?'); params.push(parseInt(superviseur_id)); }
-        if (user_id && hasUser) { conditions.push('m.user_id = ?'); params.push(parseInt(user_id)); }
-        if (date_debut) { conditions.push('m.date_debut >= ?'); params.push(date_debut); }
-        if (date_fin) { conditions.push('m.date_fin_prevue <= ?'); params.push(date_fin); }
+        if (statut) {
+            conditions.push('m.statut = ?');
+            params.push(statut);
+        }
+        if (priorite) {
+            conditions.push('m.priorite = ?');
+            params.push(priorite);
+        }
+        if (technicien_id) {
+            conditions.push('m.technicien_id = ?');
+            params.push(parseInt(technicien_id));
+        }
+        if (superviseur_id) {
+            conditions.push('m.superviseur_id = ?');
+            params.push(parseInt(superviseur_id));
+        }
+        if (user_id && hasUser) {
+            conditions.push('m.user_id = ?');
+            params.push(parseInt(user_id));
+        }
+        if (date_debut) {
+            conditions.push('m.date_debut >= ?');
+            params.push(date_debut);
+        }
+        if (date_fin) {
+            conditions.push('m.date_fin_prevue <= ?');
+            params.push(date_fin);
+        }
 
         if (req.userRole === 'technicien') {
             const tech = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
-            if (tech) { conditions.push('m.technicien_id = ?'); params.push(tech.id); }
+            if (tech) {
+                conditions.push('m.technicien_id = ?');
+                params.push(tech.id);
+            }
         } else if (req.userRole === 'superviseur') {
             const sup = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
-            if (sup) { conditions.push('m.superviseur_id = ?'); params.push(sup.id); }
+            if (sup) {
+                conditions.push('m.superviseur_id = ?');
+                params.push(sup.id);
+            }
         }
 
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -520,11 +662,12 @@ router.get('/', authenticate, (req, res) => {
             success: true,
             data: missions,
             pagination: {
-                page: parseInt(page), limit: parseInt(limit),
-                total: total?.count || 0, pages: Math.ceil((total?.count || 0) / parseInt(limit))
-            }
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: total?.count || 0,
+                pages: Math.ceil((total?.count || 0) / parseInt(limit)),
+            },
         });
-
     } catch (error) {
         console.error('❌ Erreur de récupération des missions:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -532,7 +675,7 @@ router.get('/', authenticate, (req, res) => {
 });
 
 // ========================================================
-// GET /missions/:id - DÉTAILS
+// GET /missions/:id — DÉTAILS
 // ========================================================
 router.get('/:id', authenticate, (req, res) => {
     try {
@@ -579,7 +722,9 @@ router.get('/:id', authenticate, (req, res) => {
 
         const mission = db.prepare(query).get(missionId);
 
-        if (!mission) return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        if (!mission) {
+            return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        }
 
         // Vérification d'accès
         if (req.userRole === 'technicien') {
@@ -598,28 +743,33 @@ router.get('/:id', authenticate, (req, res) => {
             }
         }
 
-        const rapports = db.prepare(`
-            SELECT id, titre, statut, date_intervention, created_at
-            FROM rapports WHERE mission_id = ? ORDER BY created_at DESC
-        `).all(missionId);
+        const rapports = db
+            .prepare(`
+                SELECT id, titre, statut, date_intervention, created_at
+                FROM rapports WHERE mission_id = ? ORDER BY created_at DESC
+            `)
+            .all(missionId);
 
-        const incidents = db.prepare(`
-            SELECT id, titre, severite, statut, created_at
-            FROM incidents WHERE rapport_id IN (SELECT id FROM rapports WHERE mission_id = ?)
-            ORDER BY created_at DESC LIMIT 10
-        `).all(missionId);
+        const incidents = db
+            .prepare(`
+                SELECT id, titre, severite, statut, created_at
+                FROM incidents WHERE rapport_id IN (SELECT id FROM rapports WHERE mission_id = ?)
+                ORDER BY created_at DESC LIMIT 10
+            `)
+            .all(missionId);
 
-        const historique = db.prepare(`
-            SELECT action, details, created_at
-            FROM historique_actions WHERE table_concerned = 'missions' AND enregistrement_id = ?
-            ORDER BY created_at DESC LIMIT 20
-        `).all(missionId);
+        const historique = db
+            .prepare(`
+                SELECT action, details, created_at
+                FROM historique_actions WHERE table_concerned = 'missions' AND enregistrement_id = ?
+                ORDER BY created_at DESC LIMIT 20
+            `)
+            .all(missionId);
 
         return res.json({
             success: true,
-            data: { ...mission, rapports, incidents, historique }
+            data: { ...mission, rapports, incidents, historique },
         });
-
     } catch (error) {
         console.error('❌ Erreur de récupération de la mission:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -627,8 +777,9 @@ router.get('/:id', authenticate, (req, res) => {
 });
 
 // ========================================================
-// POST /missions - CRÉER UNE MISSION
-// 🎯 CORRIGÉ : Accepte user_id SANS exiger superviseur_id
+// POST /missions — CRÉER UNE MISSION
+// 🎯 Accepte user_id SANS exiger superviseur_id
+// 🎯 Valide date_fin_prevue >= date_debut
 // ========================================================
 router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
     try {
@@ -649,19 +800,29 @@ router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
             latitude,
             longitude,
             notes,
-            superviseur_id
+            superviseur_id,
         } = req.body;
 
+        // --- Validations champs obligatoires ---
         if (!titre || !date_debut) {
-            return res.status(400).json({ success: false, message: 'Titre et date de début sont requis' });
+            return res.status(400).json({
+                success: false,
+                message: 'Titre et date de début sont requis',
+            });
         }
 
         if (type_mission && !TYPES_MISSION.includes(type_mission)) {
-            return res.status(400).json({ success: false, message: `Type de mission invalide` });
+            return res.status(400).json({ success: false, message: 'Type de mission invalide' });
         }
 
         if (priorite && !PRIORITES.includes(priorite)) {
-            return res.status(400).json({ success: false, message: `Priorité invalide` });
+            return res.status(400).json({ success: false, message: 'Priorité invalide' });
+        }
+
+        // 🎯 Validation des dates
+        const datesCheck = validateDates(date_debut, date_fin_prevue, { allowNullFin: true });
+        if (!datesCheck.ok) {
+            return res.status(400).json({ success: false, message: datesCheck.message });
         }
 
         const db = getDb();
@@ -683,7 +844,9 @@ router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
             finalTechnicienId = resolved.technicien_id;
             finalSuperviseurId = resolved.superviseur_id;
         } else if (technicien_id) {
-            const tech = db.prepare('SELECT id, utilisateur_id FROM techniciens WHERE id = ?').get(parseInt(technicien_id));
+            const tech = db
+                .prepare('SELECT id, utilisateur_id FROM techniciens WHERE id = ?')
+                .get(parseInt(technicien_id));
             if (tech) {
                 finalTechnicienId = tech.id;
                 finalUserId = tech.utilisateur_id;
@@ -695,19 +858,16 @@ router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
         // =========================================================
         let superviseurId = finalSuperviseurId;
 
-        // Si c'est un superviseur connecté, l'utiliser par défaut
         if (!superviseurId && req.userRole === 'superviseur') {
             const sup = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
             if (sup) superviseurId = sup.id;
         }
 
-        // Si superviseur_id est explicitement fourni
         if (!superviseurId && superviseur_id) {
             const sup = db.prepare('SELECT id FROM superviseurs WHERE id = ?').get(superviseur_id);
             if (sup) superviseurId = sup.id;
         }
 
-        // 🎯 Si l'utilisateur sélectionné est un superviseur → l'utiliser
         if (!superviseurId && finalUserId) {
             const selectedUser = db.prepare('SELECT role FROM utilisateurs WHERE id = ?').get(finalUserId);
             if (selectedUser && (selectedUser.role || '').toLowerCase() === 'superviseur') {
@@ -716,23 +876,21 @@ router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
             }
         }
 
-        // 🎯 Si toujours pas de superviseur et c'est un admin/DJ → prendre le premier superviseur
         if (!superviseurId && (req.userRole === 'admin' || req.userRole === 'dj')) {
             const firstSup = db.prepare('SELECT id FROM superviseurs LIMIT 1').get();
             if (firstSup) superviseurId = firstSup.id;
         }
 
-        // ⚠️ Si toujours rien, on laisse superviseurId = null
-        // (au lieu de bloquer avec "Veuillez sélectionner un superviseur")
-
         // Vérifier le technicien si fourni
         if (finalTechnicienId) {
-            const technicien = db.prepare(`
-                SELECT t.id, t.disponible, u.nom, u.prenom
-                FROM techniciens t
-                LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
-                WHERE t.id = ?
-            `).get(finalTechnicienId);
+            const technicien = db
+                .prepare(`
+                    SELECT t.id, t.disponible, u.nom, u.prenom
+                    FROM techniciens t
+                    LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
+                    WHERE t.id = ?
+                `)
+                .get(finalTechnicienId);
 
             if (!technicien) {
                 return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
@@ -740,7 +898,7 @@ router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
             if (!technicien.disponible) {
                 return res.status(400).json({
                     success: false,
-                    message: `Le technicien ${technicien.prenom} ${technicien.nom} n'est pas disponible`
+                    message: `Le technicien ${technicien.prenom} ${technicien.nom} n'est pas disponible`,
                 });
             }
         }
@@ -750,49 +908,53 @@ router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
         // =========================================================
         let result;
         if (hasUser) {
-            result = db.prepare(`
-                INSERT INTO missions (
-                    user_id, superviseur_id, technicien_id,
-                    titre, description, type_mission, priorite, statut,
-                    date_debut, date_fin_prevue, adresse, latitude, longitude, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'planifiee', ?, ?, ?, ?, ?, ?)
-            `).run(
-                finalUserId,
-                superviseurId,
-                finalTechnicienId,
-                titre,
-                description || null,
-                type_mission || null,
-                priorite || 'moyenne',
-                date_debut,
-                date_fin_prevue || null,
-                adresse || null,
-                latitude || null,
-                longitude || null,
-                notes || null
-            );
+            result = db
+                .prepare(`
+                    INSERT INTO missions (
+                        user_id, superviseur_id, technicien_id,
+                        titre, description, type_mission, priorite, statut,
+                        date_debut, date_fin_prevue, adresse, latitude, longitude, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'planifiee', ?, ?, ?, ?, ?, ?)
+                `)
+                .run(
+                    finalUserId,
+                    superviseurId,
+                    finalTechnicienId,
+                    titre,
+                    description || null,
+                    type_mission || null,
+                    priorite || 'moyenne',
+                    date_debut,
+                    date_fin_prevue || null,
+                    adresse || null,
+                    latitude || null,
+                    longitude || null,
+                    notes || null
+                );
         } else {
             const techIdToStore = finalTechnicienId || finalUserId;
-            result = db.prepare(`
-                INSERT INTO missions (
-                    superviseur_id, technicien_id,
-                    titre, description, type_mission, priorite, statut,
-                    date_debut, date_fin_prevue, adresse, latitude, longitude, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, 'planifiee', ?, ?, ?, ?, ?, ?)
-            `).run(
-                superviseurId,
-                techIdToStore,
-                titre,
-                description || null,
-                type_mission || null,
-                priorite || 'moyenne',
-                date_debut,
-                date_fin_prevue || null,
-                adresse || null,
-                latitude || null,
-                longitude || null,
-                notes || null
-            );
+            result = db
+                .prepare(`
+                    INSERT INTO missions (
+                        superviseur_id, technicien_id,
+                        titre, description, type_mission, priorite, statut,
+                        date_debut, date_fin_prevue, adresse, latitude, longitude, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'planifiee', ?, ?, ?, ?, ?, ?)
+                `)
+                .run(
+                    superviseurId,
+                    techIdToStore,
+                    titre,
+                    description || null,
+                    type_mission || null,
+                    priorite || 'moyenne',
+                    date_debut,
+                    date_fin_prevue || null,
+                    adresse || null,
+                    latitude || null,
+                    longitude || null,
+                    notes || null
+                );
         }
 
         const missionId = result.lastInsertRowid;
@@ -819,39 +981,55 @@ router.post('/', authenticate, hasPermission('creer_mission'), (req, res) => {
             titre,
             user_id: finalUserId,
             technicien_id: finalTechnicienId,
-            superviseur_id: superviseurId
+            superviseur_id: superviseurId,
         });
 
         return res.status(201).json({
             success: true,
             message: 'Mission créée avec succès',
-            id: missionId
+            id: missionId,
         });
-
     } catch (error) {
         console.error('❌ Erreur de création de la mission:', error);
         console.error('Stack:', error.stack);
         return res.status(500).json({
             success: false,
             message: 'Erreur interne du serveur',
-            ...(process.env.NODE_ENV !== 'production' && { error: error.message })
+            ...(process.env.NODE_ENV !== 'production' && { error: error.message }),
         });
     }
 });
 
 // ========================================================
-// PUT /missions/:id - MODIFIER UNE MISSION
+// PUT /missions/:id — MODIFIER UNE MISSION
+// 🎯 Valide date_fin_prevue >= date_debut
+//    (en tenant compte des valeurs existantes si seulement l'un est modifié)
 // ========================================================
 router.put('/:id', authenticate, hasPermission('modifier_mission'), isSuperviseurOrAdmin, (req, res) => {
     try {
         const missionId = parseInt(req.params.id);
-        const { technicien_id, user_id, titre, description, type_mission, priorite, date_debut, date_fin_prevue, adresse, latitude, longitude, notes } = req.body;
+        const {
+            technicien_id,
+            user_id,
+            titre,
+            description,
+            type_mission,
+            priorite,
+            date_debut,
+            date_fin_prevue,
+            adresse,
+            latitude,
+            longitude,
+            notes,
+        } = req.body;
 
         const db = getDb();
         const hasUser = hasUserIdColumn(db);
 
         const mission = db.prepare('SELECT * FROM missions WHERE id = ?').get(missionId);
-        if (!mission) return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        if (!mission) {
+            return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        }
 
         if (req.userRole !== 'admin' && req.userRole !== 'dj') {
             const superviseur = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
@@ -861,7 +1039,18 @@ router.put('/:id', authenticate, hasPermission('modifier_mission'), isSuperviseu
         }
 
         if (mission.statut === 'terminee' || mission.statut === 'annulee') {
-            return res.status(400).json({ success: false, message: `Impossible de modifier une mission ${mission.statut}` });
+            return res.status(400).json({
+                success: false,
+                message: `Impossible de modifier une mission ${mission.statut}`,
+            });
+        }
+
+        // 🎯 Validation des dates (utilise valeurs existantes si non fournies)
+        const finalDateDebut = date_debut !== undefined ? date_debut : mission.date_debut;
+        const finalDateFin = date_fin_prevue !== undefined ? date_fin_prevue : mission.date_fin_prevue;
+        const datesCheck = validateDates(finalDateDebut, finalDateFin, { allowNullFin: true });
+        if (!datesCheck.ok) {
+            return res.status(400).json({ success: false, message: datesCheck.message });
         }
 
         // 🎯 Résoudre le nouvel utilisateur si user_id fourni
@@ -886,18 +1075,22 @@ router.put('/:id', authenticate, hasPermission('modifier_mission'), isSuperviseu
                     db.prepare('UPDATE techniciens SET en_mission = 0 WHERE id = ?').run(mission.technicien_id);
                 }
             } else {
-                const technicien = db.prepare(`
-                    SELECT t.id, t.disponible, u.nom, u.prenom
-                    FROM techniciens t
-                    LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
-                    WHERE t.id = ?
-                `).get(newTechnicienId);
+                const technicien = db
+                    .prepare(`
+                        SELECT t.id, t.disponible, u.nom, u.prenom
+                        FROM techniciens t
+                        LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
+                        WHERE t.id = ?
+                    `)
+                    .get(newTechnicienId);
 
-                if (!technicien) return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+                if (!technicien) {
+                    return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+                }
                 if (!technicien.disponible) {
                     return res.status(400).json({
                         success: false,
-                        message: `Le technicien ${technicien.prenom} ${technicien.nom} n'est pas disponible`
+                        message: `Le technicien ${technicien.prenom} ${technicien.nom} n'est pas disponible`,
                     });
                 }
 
@@ -911,18 +1104,54 @@ router.put('/:id', authenticate, hasPermission('modifier_mission'), isSuperviseu
         const updateFields = [];
         const params = [];
 
-        if (hasUser && newUserId !== null) { updateFields.push('user_id = ?'); params.push(newUserId); }
-        if (newTechnicienId !== undefined) { updateFields.push('technicien_id = ?'); params.push(newTechnicienId); }
-        if (titre !== undefined) { updateFields.push('titre = ?'); params.push(titre || null); }
-        if (description !== undefined) { updateFields.push('description = ?'); params.push(description || null); }
-        if (type_mission !== undefined) { updateFields.push('type_mission = ?'); params.push(type_mission || null); }
-        if (priorite !== undefined) { updateFields.push('priorite = ?'); params.push(priorite || null); }
-        if (date_debut !== undefined) { updateFields.push('date_debut = ?'); params.push(date_debut || null); }
-        if (date_fin_prevue !== undefined) { updateFields.push('date_fin_prevue = ?'); params.push(date_fin_prevue || null); }
-        if (adresse !== undefined) { updateFields.push('adresse = ?'); params.push(adresse || null); }
-        if (latitude !== undefined) { updateFields.push('latitude = ?'); params.push(latitude || null); }
-        if (longitude !== undefined) { updateFields.push('longitude = ?'); params.push(longitude || null); }
-        if (notes !== undefined) { updateFields.push('notes = ?'); params.push(notes || null); }
+        if (hasUser && newUserId !== null) {
+            updateFields.push('user_id = ?');
+            params.push(newUserId);
+        }
+        if (newTechnicienId !== undefined) {
+            updateFields.push('technicien_id = ?');
+            params.push(newTechnicienId);
+        }
+        if (titre !== undefined) {
+            updateFields.push('titre = ?');
+            params.push(titre || null);
+        }
+        if (description !== undefined) {
+            updateFields.push('description = ?');
+            params.push(description || null);
+        }
+        if (type_mission !== undefined) {
+            updateFields.push('type_mission = ?');
+            params.push(type_mission || null);
+        }
+        if (priorite !== undefined) {
+            updateFields.push('priorite = ?');
+            params.push(priorite || null);
+        }
+        if (date_debut !== undefined) {
+            updateFields.push('date_debut = ?');
+            params.push(date_debut || null);
+        }
+        if (date_fin_prevue !== undefined) {
+            updateFields.push('date_fin_prevue = ?');
+            params.push(date_fin_prevue || null);
+        }
+        if (adresse !== undefined) {
+            updateFields.push('adresse = ?');
+            params.push(adresse || null);
+        }
+        if (latitude !== undefined) {
+            updateFields.push('latitude = ?');
+            params.push(latitude || null);
+        }
+        if (longitude !== undefined) {
+            updateFields.push('longitude = ?');
+            params.push(longitude || null);
+        }
+        if (notes !== undefined) {
+            updateFields.push('notes = ?');
+            params.push(notes || null);
+        }
 
         if (updateFields.length === 0) {
             return res.status(400).json({ success: false, message: 'Aucune donnée à mettre à jour' });
@@ -933,10 +1162,13 @@ router.put('/:id', authenticate, hasPermission('modifier_mission'), isSuperviseu
 
         db.prepare(`UPDATE missions SET ${updateFields.join(', ')} WHERE id = ?`).run(...params);
 
-        logUserAction(req, 'MODIFICATION_MISSION', { table: 'missions', recordId: missionId, titre: titre || mission.titre });
+        logUserAction(req, 'MODIFICATION_MISSION', {
+            table: 'missions',
+            recordId: missionId,
+            titre: titre || mission.titre,
+        });
 
         return res.json({ success: true, message: 'Mission modifiée avec succès' });
-
     } catch (error) {
         console.error('❌ Erreur de modification de la mission:', error);
         console.error('Stack:', error.stack);
@@ -952,9 +1184,14 @@ router.delete('/:id', authenticate, hasPermission('supprimer_mission'), isSuperv
         const missionId = parseInt(req.params.id);
         const db = getDb();
         const mission = db.prepare('SELECT * FROM missions WHERE id = ?').get(missionId);
-        if (!mission) return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        if (!mission) {
+            return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        }
         if (mission.statut === 'en_cours') {
-            return res.status(400).json({ success: false, message: 'Impossible de supprimer une mission en cours' });
+            return res.status(400).json({
+                success: false,
+                message: 'Impossible de supprimer une mission en cours',
+            });
         }
 
         if (mission.technicien_id) {
@@ -962,10 +1199,13 @@ router.delete('/:id', authenticate, hasPermission('supprimer_mission'), isSuperv
         }
 
         db.prepare('DELETE FROM missions WHERE id = ?').run(missionId);
-        logUserAction(req, 'SUPPRESSION_MISSION', { table: 'missions', recordId: missionId, titre: mission.titre });
+        logUserAction(req, 'SUPPRESSION_MISSION', {
+            table: 'missions',
+            recordId: missionId,
+            titre: mission.titre,
+        });
 
         return res.json({ success: true, message: 'Mission supprimée avec succès' });
-
     } catch (error) {
         console.error('❌ Erreur de suppression de la mission:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -981,14 +1221,19 @@ router.patch('/:id/affecter', authenticate, hasPermission('affecter_mission'), i
         const { technicien_id, user_id } = req.body;
 
         if (!technicien_id && !user_id) {
-            return res.status(400).json({ success: false, message: 'ID du technicien ou utilisateur requis' });
+            return res.status(400).json({
+                success: false,
+                message: 'ID du technicien ou utilisateur requis',
+            });
         }
 
         const db = getDb();
         const hasUser = hasUserIdColumn(db);
 
         const mission = db.prepare('SELECT * FROM missions WHERE id = ?').get(missionId);
-        if (!mission) return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        if (!mission) {
+            return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        }
 
         const superviseur = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
         if (mission.superviseur_id !== superviseur.id) {
@@ -1008,18 +1253,22 @@ router.patch('/:id/affecter', authenticate, hasPermission('affecter_mission'), i
         }
 
         if (finalTechId) {
-            const technicien = db.prepare(`
-                SELECT t.id, t.disponible, u.nom, u.prenom
-                FROM techniciens t
-                LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
-                WHERE t.id = ?
-            `).get(finalTechId);
+            const technicien = db
+                .prepare(`
+                    SELECT t.id, t.disponible, u.nom, u.prenom
+                    FROM techniciens t
+                    LEFT JOIN utilisateurs u ON t.utilisateur_id = u.id
+                    WHERE t.id = ?
+                `)
+                .get(finalTechId);
 
-            if (!technicien) return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+            if (!technicien) {
+                return res.status(404).json({ success: false, message: 'Technicien non trouvé' });
+            }
             if (!technicien.disponible) {
                 return res.status(400).json({
                     success: false,
-                    message: `Le technicien ${technicien.prenom} ${technicien.nom} n'est pas disponible`
+                    message: `Le technicien ${technicien.prenom} ${technicien.nom} n'est pas disponible`,
                 });
             }
         }
@@ -1032,11 +1281,13 @@ router.patch('/:id/affecter', authenticate, hasPermission('affecter_mission'), i
         }
 
         if (hasUser && finalUserId) {
-            db.prepare('UPDATE missions SET technicien_id = ?, user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-                .run(finalTechId || null, finalUserId, missionId);
+            db.prepare(
+                'UPDATE missions SET technicien_id = ?, user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+            ).run(finalTechId || null, finalUserId, missionId);
         } else {
-            db.prepare('UPDATE missions SET technicien_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-                .run(finalTechId || null, missionId);
+            db.prepare(
+                'UPDATE missions SET technicien_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+            ).run(finalTechId || null, missionId);
         }
 
         if (finalUserId) {
@@ -1051,14 +1302,16 @@ router.patch('/:id/affecter', authenticate, hasPermission('affecter_mission'), i
         }
 
         logUserAction(req, 'AFFECTATION_MISSION', {
-            table: 'missions', recordId: missionId,
-            technicien_id: finalTechId, user_id: finalUserId, titre: mission.titre
+            table: 'missions',
+            recordId: missionId,
+            technicien_id: finalTechId,
+            user_id: finalUserId,
+            titre: mission.titre,
         });
 
         return res.json({ success: true, message: 'Utilisateur affecté avec succès' });
-
     } catch (error) {
-        console.error('❌ Erreur d\'affectation:', error);
+        console.error("❌ Erreur d'affectation:", error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
     }
 });
@@ -1071,14 +1324,18 @@ router.patch('/:id/statut', authenticate, hasPermission('changer_statut_mission'
         const missionId = parseInt(req.params.id);
         const { statut } = req.body;
 
-        if (!statut) return res.status(400).json({ success: false, message: 'Statut requis' });
+        if (!statut) {
+            return res.status(400).json({ success: false, message: 'Statut requis' });
+        }
         if (!STATUTS.includes(statut)) {
-            return res.status(400).json({ success: false, message: `Statut invalide` });
+            return res.status(400).json({ success: false, message: 'Statut invalide' });
         }
 
         const db = getDb();
         const mission = db.prepare('SELECT * FROM missions WHERE id = ?').get(missionId);
-        if (!mission) return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        if (!mission) {
+            return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        }
 
         if (req.userRole !== 'admin') {
             const superviseur = db.prepare('SELECT id FROM superviseurs WHERE utilisateur_id = ?').get(req.userId);
@@ -1097,11 +1354,17 @@ router.patch('/:id/statut', authenticate, hasPermission('changer_statut_mission'
             db.prepare('UPDATE techniciens SET en_mission = 0 WHERE id = ?').run(mission.technicien_id);
         }
 
-        db.prepare('UPDATE missions SET statut = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(statut, missionId);
+        db.prepare('UPDATE missions SET statut = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
+            statut,
+            missionId
+        );
 
         logUserAction(req, 'CHANGEMENT_STATUT_MISSION', {
-            table: 'missions', recordId: missionId,
-            ancien_statut: ancienStatut, nouveau_statut: statut, titre: mission.titre
+            table: 'missions',
+            recordId: missionId,
+            ancien_statut: ancienStatut,
+            nouveau_statut: statut,
+            titre: mission.titre,
         });
 
         // Notifier l'utilisateur concerné
@@ -1113,10 +1376,10 @@ router.patch('/:id/statut', authenticate, hasPermission('changer_statut_mission'
 
         if (targetUserId) {
             const messages = {
-                'planifiee': 'La mission a été planifiée',
-                'en_cours': 'La mission est maintenant en cours',
-                'terminee': 'La mission est terminée ✅',
-                'annulee': 'La mission a été annulée ❌'
+                planifiee: 'La mission a été planifiée',
+                en_cours: 'La mission est maintenant en cours',
+                terminee: 'La mission est terminée ✅',
+                annulee: 'La mission a été annulée ❌',
             };
             db.prepare(`
                 INSERT INTO notifications (utilisateur_id, type, titre, message, donnees)
@@ -1129,7 +1392,6 @@ router.patch('/:id/statut', authenticate, hasPermission('changer_statut_mission'
         }
 
         return res.json({ success: true, message: `Statut mis à jour: ${statut}` });
-
     } catch (error) {
         console.error('❌ Erreur de changement de statut:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });
@@ -1146,7 +1408,9 @@ router.patch('/:id/terminer', authenticate, hasPermission('changer_statut_missio
 
         const db = getDb();
         const mission = db.prepare('SELECT * FROM missions WHERE id = ?').get(missionId);
-        if (!mission) return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        if (!mission) {
+            return res.status(404).json({ success: false, message: 'Mission non trouvée' });
+        }
 
         const technicien = db.prepare('SELECT id FROM techniciens WHERE utilisateur_id = ?').get(req.userId);
         const isOwner = technicien && mission.technicien_id === technicien.id;
@@ -1156,7 +1420,10 @@ router.patch('/:id/terminer', authenticate, hasPermission('changer_statut_missio
         }
 
         if (mission.statut === 'terminee' || mission.statut === 'annulee') {
-            return res.status(400).json({ success: false, message: `La mission est déjà ${mission.statut}` });
+            return res.status(400).json({
+                success: false,
+                message: `La mission est déjà ${mission.statut}`,
+            });
         }
 
         db.prepare(`
@@ -1172,7 +1439,9 @@ router.patch('/:id/terminer', authenticate, hasPermission('changer_statut_missio
             db.prepare('UPDATE techniciens SET en_mission = 0 WHERE id = ?').run(technicien.id);
         }
 
-        const superviseur = db.prepare('SELECT utilisateur_id FROM superviseurs WHERE id = ?').get(mission.superviseur_id);
+        const superviseur = db
+            .prepare('SELECT utilisateur_id FROM superviseurs WHERE id = ?')
+            .get(mission.superviseur_id);
         if (superviseur) {
             db.prepare(`
                 INSERT INTO notifications (utilisateur_id, type, titre, message, donnees)
@@ -1184,10 +1453,13 @@ router.patch('/:id/terminer', authenticate, hasPermission('changer_statut_missio
             );
         }
 
-        logUserAction(req, 'TERMINER_MISSION', { table: 'missions', recordId: missionId, titre: mission.titre });
+        logUserAction(req, 'TERMINER_MISSION', {
+            table: 'missions',
+            recordId: missionId,
+            titre: mission.titre,
+        });
 
         return res.json({ success: true, message: 'Mission terminée avec succès' });
-
     } catch (error) {
         console.error('❌ Erreur de fin de mission:', error);
         return res.status(500).json({ success: false, message: 'Erreur interne du serveur' });

@@ -39,8 +39,8 @@ const ACTIONS_BY_ROLE = {
     { icon: 'list-outline', label: 'Mes rapports', screen: 'Rapports', color: Colors.info },
     { icon: 'alert-circle', label: 'Signaler incident', screen: 'Incidents', color: Colors.danger },
     { icon: 'briefcase', label: 'Mes missions', screen: 'Missions', color: Colors.secondary },
-    { icon: 'calendar-outline', label: 'Planification', screen: 'Missions', color: Colors.accent },
-    { icon: 'construct', label: 'Interventions', screen: 'Missions', color: Colors.warning },
+   // { icon: 'calendar-outline', label: 'Planification', screen: 'Missions', color: Colors.accent },
+   // { icon: 'construct', label: 'Interventions', screen: 'Missions', color: Colors.warning },
     { icon: 'wifi', label: 'Réseau', screen: 'Reseau', color: Colors.warning },
     { icon: 'chatbubbles', label: 'Messages', screen: 'Messages', color: '#075E54' },
 

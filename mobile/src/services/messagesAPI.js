@@ -1,8 +1,8 @@
 //Mobile/src/services/messagesAPI.js
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-//const API_URL = 'http://10.161.59.120:3000/api';
-const API_URL = "https://bbs-mobile-suivirapport-backend.onrender.com/api";
+const API_URL = 'http://10.234.165.120:3000/api';
+//const API_URL = "https://bbs-mobile-suivirapport-backend-9pfh.onrender.com/api";;
 
 // =========================================================
 // UTILITAIRES
@@ -96,9 +96,6 @@ export const messagesAPI = {
     }
   },
 
-  /**
-   * Répondre à un message
-   */
   repondre: async (messageId, contenu, type_message = 'texte') => {
     try {
       const headers = await authHeaders();
@@ -215,9 +212,6 @@ export const messagesAPI = {
     }
   },
 
-  /**
-   * Envoyer une photo (✅ Corrigé : plus de Content-Type, URI normalisée)
-   */
   sendPhoto: async (messageId, photoUri, description = '') => {
     try {
       const token = await getToken();

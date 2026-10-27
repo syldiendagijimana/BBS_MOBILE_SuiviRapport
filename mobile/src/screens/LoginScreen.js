@@ -271,7 +271,7 @@ export default function LoginScreen({ navigation }) {
           </View>
 
           <Text style={styles.appName}>BBS SuiviRapport</Text>
-          <Text style={styles.tagline}>Gestion des rapports sur terrain</Text>
+          <Text style={styles.tagline}>Gestion des activités sur le terrain</Text>
         </Animated.View>
 
         {/* FORM */}
